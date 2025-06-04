@@ -43,12 +43,16 @@ target_compile_options(compiler_flags INTERFACE
 #################
 
 add_executable(coverage_algorithm coverage_algorithm.cpp)
-target_link_libraries(coverage_algorithm PRIVATE CoverageControl::CoverageControl)
+target_link_libraries(coverage_algorithm PRIVATE CoverageControl::CoverageControl) # Boost::boost Boost::iostreams
 install(TARGETS coverage_algorithm DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 add_executable(world_idf world_idf.cpp)
 target_link_libraries(world_idf PRIVATE CoverageControl::CoverageControl)
 install(TARGETS world_idf DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+add_executable(adaptive_algorithm adaptive_algorithm.cpp)
+target_link_libraries(adaptive_algorithm PRIVATE CoverageControl::CoverageControl) #Boost::boost Boost::iostreams
+install(TARGETS adaptive_algorithm DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # if(WITH_TORCH)
 # 	add_executable(eval_dist_gnn torch/eval_dist_gnn.cpp)

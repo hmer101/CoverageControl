@@ -150,7 +150,8 @@ set(sources_list
   coverage_system.cpp
   plotter.cpp
   cuda_utils.cpp
-  extern/Hungarian.cpp)
+  extern/Hungarian.cpp
+  adaptive_system.cpp) 
 
 if(COVERAGECONTROL_WITH_CUDA)
   list(APPEND sources_list
@@ -159,7 +160,7 @@ if(COVERAGECONTROL_WITH_CUDA)
 endif()
 list(TRANSFORM sources_list PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/src/")
 
-set(dependencies_list Eigen3::Eigen OpenMP::OpenMP_CXX)
+set(dependencies_list Eigen3::Eigen OpenMP::OpenMP_CXX) #Boost::boost Boost::iostreams
 
 add_library(${PROJECT_NAME} SHARED ${sources_list})
 target_include_directories(${PROJECT_NAME} PRIVATE "${PROJECT_BINARY_DIR}")
@@ -180,6 +181,10 @@ target_include_directories(${PROJECT_NAME} INTERFACE
   "$<INSTALL_INTERFACE:${CMAKE_INCLUDE_OUTPUT_DIRECTORY}>")
 
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INCLUDE_OUTPUT_DIRECTORY})
+#install(FILES
+#    ${CMAKE_CURRENT_SOURCE_DIR}/include/CoverageControl/adaptive_system.h
+#    ${CMAKE_CURRENT_SOURCE_DIR}/include/CoverageControl/algorithms/clairvoyant_adaptive.h
+#    DESTINATION ${CMAKE_INCLUDE_OUTPUT_DIRECTORY}/CoverageControl)
 install(TARGETS ${PROJECT_NAME} EXPORT ${PROJECT_NAME}Targets LIBRARY DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY} ARCHIVE DESTINATION ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY})
 install(FILES "${PROJECT_BINARY_DIR}/${PROJECT_NAME}/Config.h" DESTINATION ${CMAKE_INCLUDE_OUTPUT_DIRECTORY}/${PROJECT_NAME})
 
