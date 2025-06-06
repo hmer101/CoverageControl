@@ -120,6 +120,7 @@ class Plotter {
   /* void PlotMap(MapType const &, PointVector const &, PointVector const &); */
 
   void PlotMap(MapType const &map);
+  void PlotMap(MapType const& map, double cmin, double cmax);
 
   void PlotMap(MapType const &map, PointVector const &positions);
 

@@ -106,6 +106,28 @@ void Plotter::PlotMap(MapType const &map) {
   StreamMap(gp, map);
 }
 
+void Plotter::PlotMap(MapType const& map, double cmin, double cmax) {
+  Gnuplot gp;
+
+  if (GnuplotCommands(gp)) {
+    std::cerr << "Error in GnuplotCommands" << std::endl;
+    return;
+  }
+
+  // Override color range and palette for this plot
+  gp << "set cbrange [" << cmin << ":" << cmax << "]\n";
+  gp << "set palette defined ("
+     << cmin << " 'white', "
+     << (cmin + (cmax - cmin) * 0.33) << " 'light-blue', "
+     << (cmin + (cmax - cmin) * 0.66) << " 'blue', "
+     << cmax << " 'red')\n";
+
+  PlotMap(gp);
+  gp << "\n";
+
+  StreamMap(gp, map);
+}
+
 void Plotter::PlotMap(MapType const &map, PointVector const &positions) {
   Gnuplot gp;
   if (GnuplotCommands(gp)) {

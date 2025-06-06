@@ -63,7 +63,7 @@ class ClairvoyantAdaptive : public AbstractController {
 
  public:
   ClairvoyantAdaptive(Parameters const &params, AdaptiveSystem &env)
-      : ClairvoyantAdaptive(params, 1, env) {} // Only one robot for now
+      : ClairvoyantAdaptive(params, params.pNumRobots, env) {} 
   ClairvoyantAdaptive(Parameters const &params, size_t const &num_robots,
                  AdaptiveSystem &env)
       : params_{params}, num_robots_{num_robots}, env_{env} {
@@ -78,40 +78,79 @@ class ClairvoyantAdaptive : public AbstractController {
   auto GetGoals() { return goals_; }
 
   void ComputeGoals() {
-    // Implement the logic to find the largest gradient at the edge of what the
-    // robot knows
-    // For now, let's just move the robot to a random location
-    
-    Point2 current_position = env_.GetRobotPosition(0); // Assuming only one robot
-    Point2 best_goal = current_position;
-    double max_gradient = -1.0;
+    // Implement the logic to find the largest gradient at the edge of what the robot knows
+    // for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
+    //   Point2 current_position = env_.GetRobotPosition(iRobot);
+    //   Point2 best_goal = current_position;
+    //   double max_gradient = -1.0; 
+      
+    //   // Search for the largest gradient in a neighborhood around the robot
+    //   int search_radius = params_.pResolution*50; // Define a radius for the search
+    //   for (int x = -search_radius; x <= search_radius; ++x) {
+    //     for (int y = -search_radius; y <= search_radius; ++y) {
+    //       Point2 candidate_position;
+    //       candidate_position[0] = current_position[0] + x * params_.pResolution;
+    //       candidate_position[1] = current_position[1] + y * params_.pResolution;
 
-    // Search for the largest gradient in a neighborhood around the robot
-    int search_radius = 5; // Define a radius for the search
-    for (int x = -search_radius; x <= search_radius; ++x) {
-      for (int y = -search_radius; y <= search_radius; ++y) {
-        Point2 candidate_position;
-        candidate_position[0] = current_position[0] + x * params_.pResolution;
-        candidate_position[1] = current_position[1] + y * params_.pResolution;
+    //       // Check if the candidate position is within the map bounds
+    //       if (candidate_position[0] >= 0 && candidate_position[0] < params_.pWorldMapSize * params_.pResolution &&
+    //           candidate_position[1] >= 0 && candidate_position[1] < params_.pWorldMapSize * params_.pResolution) {
 
-        // Check if the candidate position is within the map bounds
-        if (candidate_position[0] >= 0 && candidate_position[0] < params_.pWorldMapSize * params_.pResolution &&
-            candidate_position[1] >= 0 && candidate_position[1] < params_.pWorldMapSize * params_.pResolution) {
+    //         // Calculate the gradient at the candidate position
+    //         Point2 gradient = env_.CalculateGradient(candidate_position);
+    //         double gradient_magnitude = gradient.norm();
 
-          // Calculate the gradient at the candidate position
-          Point2 gradient = env_.CalculateGradient(candidate_position);
-          double gradient_magnitude = gradient.norm();
+    //         // Update the best goal if the current gradient is larger than the maximum gradient found so far
+    //         if (gradient_magnitude > max_gradient) {
+    //           max_gradient = gradient_magnitude;
+    //           best_goal = candidate_position;
+    //         }
+    //       }
+    //     }
+    //   }
+    //   goals_[iRobot] = best_goal;
+    // }
 
-          // Update the best goal if the current gradient is larger than the maximum gradient found so far
-          if (gradient_magnitude > max_gradient) {
-            max_gradient = gradient_magnitude;
-            best_goal = candidate_position;
+    // Implement the logic to find the largest importance in a neighborhood around the robot
+    MapType const &world_map = env_.GetWorldMap(); // GetWorldMapMutable
+
+    for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
+      Point2 current_position = env_.GetRobotPosition(iRobot);
+      Point2 best_goal = current_position;
+      double max_importance = -1.0; 
+      
+      // Search for the largest gradient in a neighborhood around the robot
+      int search_radius = params_.pResolution*50; // Define a radius for the search
+      for (int x = -search_radius; x <= search_radius; ++x) {
+        for (int y = -search_radius; y <= search_radius; ++y) {
+          Point2 candidate_position;
+          candidate_position[0] = current_position[0] + x * params_.pResolution;
+          candidate_position[1] = current_position[1] + y * params_.pResolution;
+
+          // Check if the candidate position is within the map bounds
+          if (candidate_position[0] >= 0 && candidate_position[0] < params_.pWorldMapSize * params_.pResolution &&
+              candidate_position[1] >= 0 && candidate_position[1] < params_.pWorldMapSize * params_.pResolution) {
+
+            // Find the IDF value at the candidate position
+            // Convert to indices
+            int i = static_cast<int>(candidate_position[0] / params_.pResolution);
+            int j = static_cast<int>(candidate_position[1] / params_.pResolution);
+            
+             // Safety check
+            //if (i >= 0 && i < params_.pWorldMapSize && j >= 0 && j < params_.pWorldMapSize) {
+            float importance = world_map(i, j);
+
+            // Update the best goal if the current importance is larger than the importance found so far
+            if (importance > max_importance) {
+              max_importance = importance;
+              best_goal = candidate_position;
+            }
+            //}
           }
         }
       }
+      goals_[iRobot] = best_goal;
     }
-
-    goals_[0] = best_goal;
   }
 
   int ComputeActions() {
@@ -134,8 +173,8 @@ class ClairvoyantAdaptive : public AbstractController {
       direction.normalize();
       actions_[iRobot] = speed * direction;
       is_converged_ = false;
+
     }
-    env_.TakeSample(0); // Assuming only one robot for now
     return 0;
   }
 

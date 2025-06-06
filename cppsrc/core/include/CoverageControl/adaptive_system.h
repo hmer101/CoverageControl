@@ -79,16 +79,18 @@ class AdaptiveSystem {
   std::vector<Point2> robot_global_positions_;  //!< Global positions of the robots
   MapType
       system_map_;  //!< System map contains explored and unexplored locations
+  MapType world_gradient_map_;         //!< Map to store system map's gradient
   MapType sampling_density_map_; //!< Map to store sampling density
 
   // Adaptive Sampling related functions
   void UpdateSamplingDensity(Point2 const& position);
-  double GetObjectiveValue() const;
-  //void TakeSample(int const robot_id);
+  void CalculateGradientMap();
+  CoverageControl::Point2 CalculateGradientAtIndex(int x, int y) const;
+  // void TakeSample(int const robot_id);
 
-//private:
+  // private:
   //// Helper function to calculate the gradient of the IDF map
-  //Point2 CalculateGradient(Point2 const& position) const;
+  // Point2 CalculateGradient(Point2 const& position) const;
 
 public:
   
@@ -96,6 +98,8 @@ public:
   
   // Helper function to calculate the gradient of the IDF map
   Point2 CalculateGradient(Point2 const& position) const;
+
+  double GetObjectiveValue() const;
   
   // Adaptive Sampling related variables
   MapType
@@ -303,7 +307,11 @@ public:
         std::cerr << "Control incorrect\n";
         return 1;
       }
+
+      // TODO: MOVE INTO POST STEP COMMANDS
+      TakeSample(iRobot); // Robot take sample where it currently is
     }
+    
     PostStepCommands();
     return 0;
   }
@@ -325,6 +333,10 @@ public:
       std::cerr << "Control incorrect\n";
       return 1;
     }
+
+    // TODO: MOVE INTO POST STEP COMMANDS
+    TakeSample(robot_id); // Robot take sample where it currently is
+    
     PostStepCommands();
     return 0;
   }
@@ -456,6 +468,7 @@ public:
     PlotInitMap("./", filename);
   }
   void PlotInitMap(std::string const &, std::string const &) const;
+  void PlotGradientMap(std::string const &, std::string const &);
   void PlotRobotLocalMap(std::string const &, int const &, int const &);
   void PlotRobotSystemMap(std::string const &, int const &, int const &);
   void PlotRobotExplorationMap(std::string const &, int const &, int const &);
@@ -486,6 +499,7 @@ public:
     return world_idf_ptr_;
   }
   const WorldIDF &GetWorldIDFObject() const { return *world_idf_ptr_; }
+  const MapType &GetWorldGradientMap() const {return world_gradient_map_;}
   const MapType &GetSystemMap() const { return system_map_; }
   const MapType &GetSystemExplorationMap() const { return exploration_map_; }
   const MapType &GetSystemExploredIDFMap() const { return explored_idf_map_; }
@@ -613,10 +627,10 @@ public:
     return communication_maps;
   }
 
-  auto GetObjectiveValue() {
-    ComputeVoronoiCells();
-    return voronoi_.GetSumIDFSiteDistSqr();
-  }
+ //double GetObjectiveValue(); //{
+  //   //ComputeVoronoiCells();
+  //   return 2.1; //voronoi_.GetSumIDFSiteDistSqr();
+  // }
 
   auto GetRobotExplorationFeatures() {
     std::vector<std::vector<double>> features(num_robots_);

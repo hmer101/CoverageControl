@@ -30,6 +30,8 @@
 #include <string>
 #include <filesystem>
 
+//#include "CoverageControl/plotter.h"
+
 typedef CoverageControl::ClairvoyantCVT CoverageAlgorithm;
 /* typedef CoverageControl::CentralizedCVT CoverageAlgorithm; */
 /* typedef CoverageControl::DecentralizedCVT CoverageAlgorithm; */
@@ -71,6 +73,14 @@ int main(int argc, char** argv) {
   auto init_objective = env->GetObjectiveValue();
   std::cout << "Initial objective: " << init_objective << std::endl;
 
+  // Plot initial map
+  std::string output_dir = "/marl_sim_basic/output_cpp";
+  std::string init_filename = "cc_system_start";
+  std::string final_filename = "cc_system_end";
+
+  env->PlotInitMap(output_dir, init_filename);
+
+
   CoverageAlgorithm algorithm(params, *env);
   auto goals = algorithm.GetGoals();
 
@@ -84,7 +94,7 @@ int main(int argc, char** argv) {
     if (ii % 100 == 0) {
       std::cout << "Step: " << ii << std::endl;
     }
-    //env->RecordPlotData("system");
+    env->RecordPlotData("system");
     if (algorithm.IsConverged()) {
       break;
     }
@@ -94,10 +104,12 @@ int main(int argc, char** argv) {
             << (init_objective - final_objective) / init_objective * 100
             << std::endl;
   
-  // std::string output_dir = "/marl_sim_basic/output_cpp";
-  // std::string video_name = "system.mp4";
-  // std::filesystem::create_directory(output_dir);
-  // env->RenderRecordedMap(output_dir, video_name);
+  // Plot final map
+  env->PlotSystemMap(output_dir, 0);
+
+  std::string video_name = "system.mp4";
+  std::filesystem::create_directory(output_dir);
+  env->RenderRecordedMap(output_dir, video_name);
 
   // std::cout << "DONE!" << std::endl;
 

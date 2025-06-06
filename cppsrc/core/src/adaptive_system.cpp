@@ -68,13 +68,52 @@ CoverageControl::Point2 AdaptiveSystem::CalculateGradient(CoverageControl::Point
   return CoverageControl::Point2(gradient_x, gradient_y);
 }
 
+// Helper function to calculate the gradient at a specific index in the world map
+CoverageControl::Point2 AdaptiveSystem::CalculateGradientAtIndex(int x, int y) const {
+  double gradient_x = 0.0;
+  double gradient_y = 0.0;
+
+  if (x > 0 && x < params_.pWorldMapSize - 1) {
+    gradient_x = (GetWorldMap()(x + 1, y) - GetWorldMap()(x - 1, y)) / (2.0 * params_.pResolution);
+  }
+
+  if (y > 0 && y < params_.pWorldMapSize - 1) {
+    gradient_y = (GetWorldMap()(x, y + 1) - GetWorldMap()(x, y - 1)) / (2.0 * params_.pResolution);
+  }
+
+  return CoverageControl::Point2(gradient_x, gradient_y);
+}
+
+// Function to calculate the gradient map for the entire world map
+void AdaptiveSystem::CalculateGradientMap() {
+  world_gradient_map_ = MapType::Constant(params_.pWorldMapSize, params_.pWorldMapSize, 0);
+
+  for (int x = 1; x < params_.pWorldMapSize - 1; ++x) {
+    for (int y = 1; y < params_.pWorldMapSize - 1; ++y) {
+      CoverageControl::Point2 gradient = CalculateGradientAtIndex(x, y);
+      world_gradient_map_(x, y) = gradient.norm();
+
+      //std::cout << "Gradient norm at (" << x << "," << y << ") = " << gradient.norm() << std::endl;
+    }
+  }
+}
+
 // Modify the GetObjectiveValue() function to return a measure of uncertainty or information gain
 double AdaptiveSystem::GetObjectiveValue() const {
   // Calculate the sum of the sampling density map
-  double sum_sampling_density = sampling_density_map_.sum();
-
+  //double sum_sampling_density = sampling_density_map_.sum();
   // Return the negative of the sum as the objective value (to minimize uncertainty)
-  return -sum_sampling_density;
+   //-sum_sampling_density;
+
+  // Get the total gradient at all of the robots' positions
+  double total_gradient = 0.0;
+  for (const auto& robot : robots_) {
+    CoverageControl::Point2 position = robot.GetGlobalCurrentPosition();
+    CoverageControl::Point2 gradient = CalculateGradient(position);
+    total_gradient += gradient.norm();
+  }
+
+  return total_gradient;
 }
 
 // Add a function to simulate the robot taking a sample
@@ -196,9 +235,6 @@ AdaptiveSystem::AdaptiveSystem(Parameters const &params,
     robots_.push_back(RobotModel(params_, start_pos, world_idf_ptr_));
   }
   InitSetup();
-
-  // Initialize the sampling density map
-  sampling_density_map_ = MapType::Constant(params_.pWorldMapSize, params_.pWorldMapSize, 0);
 }
 
 AdaptiveSystem::AdaptiveSystem(Parameters const &params,
@@ -309,6 +345,13 @@ void AdaptiveSystem::InitSetup() {
       MapType::Constant(params_.pWorldMapSize, params_.pWorldMapSize, 1);
   explored_idf_map_ =
       MapType::Constant(params_.pWorldMapSize, params_.pWorldMapSize, 0);
+
+  // Initialize the gradient map
+  world_gradient_map_ = MapType::Constant(params_.pWorldMapSize, params_.pWorldMapSize, 0);
+
+  // Initialize the sampling density map
+  sampling_density_map_ = MapType::Constant(params_.pWorldMapSize, params_.pWorldMapSize, 0);
+  
   total_idf_weight_ = GetWorldMap().sum();
   relative_positions_neighbors_.resize(num_robots_);
   neighbor_ids_.resize(num_robots_);
@@ -503,10 +546,10 @@ void AdaptiveSystem::RenderRecordedMap(std::string const &dir_name,
   Plotter plotter(frame_dir, params_.pWorldMapSize * params_.pResolution,
                   params_.pResolution);
   plotter.SetScale(params_.pPlotScale);
-  Plotter plotter_voronoi(frame_dir,
-                          params_.pWorldMapSize * params_.pResolution,
-                          params_.pResolution);
-  plotter_voronoi.SetScale(params_.pPlotScale);
+  // Plotter plotter_voronoi(frame_dir,
+  //                         params_.pWorldMapSize * params_.pResolution,
+  //                         params_.pResolution);
+  // plotter_voronoi.SetScale(params_.pPlotScale);
 #pragma omp parallel for
   for (size_t i = 0; i < plotter_data_.size(); ++i) {
     auto iPlotter = plotter;
@@ -517,11 +560,11 @@ void AdaptiveSystem::RenderRecordedMap(std::string const &dir_name,
                      plotter_data_[i].positions_history,
                      plotter_data_[i].robot_status,
                      params_.pCommunicationRange);
-    auto iPlotterVoronoi = plotter_voronoi;
-    iPlotterVoronoi.SetPlotName("voronoi_map", i);
-    iPlotterVoronoi.PlotMap(plotter_data_[i].world_map, plotter_data_[i].positions,
-                            plotter_data_[i].voronoi,
-                            plotter_data_[i].positions_history);
+    //auto iPlotterVoronoi = plotter_voronoi;
+    // iPlotterVoronoi.SetPlotName("voronoi_map", i);
+    // iPlotterVoronoi.PlotMap(plotter_data_[i].world_map, plotter_data_[i].positions,
+    //                         plotter_data_[i].voronoi,
+    //                         plotter_data_[i].positions_history);
   }
   bool ffmpeg_call =
       system(("ffmpeg -y -r 30 -i " + frame_dir +
@@ -531,14 +574,14 @@ void AdaptiveSystem::RenderRecordedMap(std::string const &dir_name,
   if (ffmpeg_call) {
     std::cout << "Error: ffmpeg call failed." << std::endl;
   }
-  ffmpeg_call =
-      system(("ffmpeg -y -r 30 -i " + frame_dir +
-              "voronoi_map%04d.png -vcodec libx264 -crf 25  -pix_fmt yuv420p " +
-              dir_name + "/voronoi_" + video_name)
-                 .c_str());
-  if (ffmpeg_call) {
-    std::cout << "Error: ffmpeg call failed." << std::endl;
-  }
+  // ffmpeg_call =
+  //     system(("ffmpeg -y -r 30 -i " + frame_dir +
+  //             "voronoi_map%04d.png -vcodec libx264 -crf 25  -pix_fmt yuv420p " +
+  //             dir_name + "/voronoi_" + video_name)
+  //                .c_str());
+  // if (ffmpeg_call) {
+  //   std::cout << "Error: ffmpeg call failed." << std::endl;
+  // }
   std::filesystem::remove_all(frame_dir);
 }
 
@@ -553,18 +596,18 @@ void AdaptiveSystem::RecordPlotData(std::vector<int> const &robot_status,
   data.positions = robot_global_positions_;
   data.positions_history = robot_positions_history_;
   data.robot_status = robot_status;
-  ComputeVoronoiCells();
-  std::vector<std::list<Point2>> voronoi;
-  auto voronoi_cells = voronoi_.GetVoronoiCells();
-  for (size_t i = 0; i < num_robots_; ++i) {
-    std::list<Point2> cell_points;
-    for (auto const &pos : voronoi_cells[i].cell) {
-      cell_points.push_back(Point2(pos[0], pos[1]));
-    }
-    cell_points.push_back(cell_points.front());
-    voronoi.push_back(cell_points);
-  }
-  data.voronoi = voronoi;
+  //ComputeVoronoiCells();
+  //std::vector<std::list<Point2>> voronoi;
+  // auto voronoi_cells = voronoi_.GetVoronoiCells();
+  // for (size_t i = 0; i < num_robots_; ++i) {
+  //   std::list<Point2> cell_points;
+  //   for (auto const &pos : voronoi_cells[i].cell) {
+  //     cell_points.push_back(Point2(pos[0], pos[1]));
+  //   }
+  //   cell_points.push_back(cell_points.front());
+  //   voronoi.push_back(cell_points);
+  // }
+  //data.voronoi = voronoi;
   data.world_map = GetWorldMap();
   plotter_data_.push_back(data);
 }
@@ -617,6 +660,24 @@ void AdaptiveSystem::PlotInitMap(std::string const &dir_name,
   plotter.SetScale(params_.pPlotScale);
   plotter.SetPlotName(map_name);
   plotter.PlotMap(GetWorldMap(), robot_global_positions_);
+}
+
+void AdaptiveSystem::PlotGradientMap(std::string const &dir_name, std::string const &map_name){
+  // Calculate the gradient map
+  CalculateGradientMap();
+  
+  // Plot the gradient map
+  // Get min and max gradient value
+  //double min_value = world_gradient_map_.minCoeff();
+  double max_value = world_gradient_map_.maxCoeff();
+  //std::cout << "Gradient map min: " << min_value << " max: " << max_value << std::endl;
+
+  // Plot the gradient map with appropriate cbrange
+  Plotter plotter(dir_name, params_.pWorldMapSize * params_.pResolution,
+                  params_.pResolution);
+  plotter.SetScale(params_.pPlotScale);
+  plotter.SetPlotName(map_name);
+  plotter.PlotMap(GetWorldGradientMap(), 0.0, max_value * 1.1);
 }
 
 void AdaptiveSystem::PlotMapVoronoi(std::string const &dir_name,

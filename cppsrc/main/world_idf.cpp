@@ -27,21 +27,30 @@ int main(int argc, char** argv) {
   CoverageControl::CudaUtils::SetUseCuda(false);
   Parameters params;
   params.pNumRobots = 1;
+  params.pWorldMapSize = 100; //1024;
+
   params.pNumGaussianFeatures = 2;
-  params.pNumPolygons = 20;
-  params.pWorldMapSize = 1024;
+
+  params.pMinSigma = 10;
+  params.pMaxSigma = 20;
+  params.pMinPeak = 6;
+  params.pMaxPeak = 10;
+
+  params.pNumPolygons = 0;  // 20;
   params.pMaxVertices = 7;
   params.pPolygonRadius = 128;
 
   CoverageSystem env(params);
   env.WriteEnvironment("pos", "env");
   env.PlotInitMap("init_map");
-  CoverageControl::MapType map = env.GetWorldMap();
-  CoverageControl::CudaUtils::SetUseCuda(true);
-  WorldIDF world_idf(params, "env");
-  CoverageSystem env1(params, world_idf, "pos");
-  env1.WriteEnvironment("pos1", "env1");
-  env1.PlotInitMap("init_map1");
+  
+  // CoverageControl::MapType map = env.GetWorldMap();
+  // CoverageControl::CudaUtils::SetUseCuda(true);
+  
+  // WorldIDF world_idf(params, "env");
+  // CoverageSystem env1(params, world_idf, "pos");
+  // env1.WriteEnvironment("pos1", "env1");
+  // env1.PlotInitMap("init_map1");
 
   return 0;
 }

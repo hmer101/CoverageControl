@@ -28,6 +28,9 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <filesystem>
+
+//#include "CoverageControl/plotter.h"
 
 typedef CoverageControl::ClairvoyantAdaptive AdaptiveAlgorithm; //CoverageAlgorithm;
 /* typedef CoverageControl::CentralizedCVT CoverageAlgorithm; */
@@ -43,7 +46,7 @@ using CoverageControl::WorldIDF;
 
 int main(int argc, char** argv) {
   std::cout << "Started adaptive_algorithm" << std::endl;
-  
+
   CoverageControl::CudaUtils::SetUseCuda(false);
   Parameters params;
   /* params.pSensorSize = 16; */
@@ -53,6 +56,8 @@ int main(int argc, char** argv) {
   }
 
   std::unique_ptr<CoverageControl::AdaptiveSystem> env;
+
+  std::cout << "1" << std::endl;
 
   if (argc == 3) {
     std::cerr << "Please provide both position and IDF files" << std::endl;
@@ -69,8 +74,27 @@ int main(int argc, char** argv) {
     env = std::make_unique<CoverageControl::AdaptiveSystem>(params);
   }
 
+  std::cout << "2" << std::endl;
+
   auto init_objective = env->GetObjectiveValue();
-  std::cout << "Initial objective: " << init_objective << std::endl;
+
+  // Plot initial map
+  std::cout << "About to plot init map" << std::endl;
+  std::string output_dir = "/marl_sim_basic/output_cpp";
+  std::string init_filename = "as_system_start";
+  std::string gradient_filename = "as_system_grad";
+  std::string final_filename = "as_system_end";
+  std::string video_name = "system.mp4";
+
+  env->PlotInitMap(output_dir, init_filename);
+  std::cout << "Plotted init map" << std::endl;
+
+  // Plot map gradient
+  // std::cout << "About to plot grad map" << std::endl;
+
+  // env->PlotGradientMap(output_dir, gradient_filename);
+  // std::cout << "Plotted grad map" << std::endl;
+
 
   AdaptiveAlgorithm algorithm(params, *env);
   auto goals = algorithm.GetGoals();
@@ -85,20 +109,26 @@ int main(int argc, char** argv) {
     if (ii % 100 == 0) {
       std::cout << "Step: " << ii << std::endl;
     }
-    //env->RecordPlotData("system");
+    env->RecordPlotData("system");
     if (algorithm.IsConverged()) {
       break;
     }
   }
-  auto final_objective = env->GetObjectiveValue();
-  std::cout << "Improvement %: "
-            << (init_objective - final_objective) / init_objective * 100
-            << std::endl;
 
-  // std::string output_dir = "/marl_sim_basic/output_cpp";
-  // std::string video_name = "system.mp4";
-  // std::filesystem::create_directory(output_dir);
-  // env->RenderRecordedMap(output_dir, video_name);
+  // Print improvement in objective value
+  auto final_objective = env->GetObjectiveValue();
+  std::cout << "Initial objective: " << init_objective << std::endl;
+  std::cout << "Final objective: " << final_objective << std::endl;
+
+  // std::cout << "Improvement %: "
+  //           << (init_objective - final_objective) / init_objective * 100
+  //           << std::endl;
+
+  // Plot final map
+  env->PlotSystemMap(output_dir, 1);
+
+  std::filesystem::create_directory(output_dir);
+  env->RenderRecordedMap(output_dir, video_name);
 
   // std::cout << "DONE!" << std::endl;
 
