@@ -332,7 +332,7 @@ void AdaptiveSystem::InitSetup() {
   num_robots_ = robots_.size();
   robot_positions_history_.resize(num_robots_);
 
-  voronoi_cells_.resize(num_robots_);
+  //voronoi_cells_.resize(num_robots_);
 
   robot_global_positions_.resize(num_robots_);
   for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
@@ -680,26 +680,26 @@ void AdaptiveSystem::PlotGradientMap(std::string const &dir_name, std::string co
   plotter.PlotMap(GetWorldGradientMap(), 0.0, max_value * 1.1);
 }
 
-void AdaptiveSystem::PlotMapVoronoi(std::string const &dir_name,
-                                    int const &step) {
-  ComputeVoronoiCells();
-  Plotter plotter(dir_name, params_.pWorldMapSize * params_.pResolution,
-                  params_.pResolution);
-  plotter.SetScale(params_.pPlotScale);
-  plotter.SetPlotName("voronoi_map", step);
-  plotter.PlotMap(GetWorldMap(), robot_global_positions_, voronoi_,
-                  robot_positions_history_);
-}
+// void AdaptiveSystem::PlotMapVoronoi(std::string const &dir_name,
+//                                     int const &step) {
+//   ComputeVoronoiCells();
+//   Plotter plotter(dir_name, params_.pWorldMapSize * params_.pResolution,
+//                   params_.pResolution);
+//   plotter.SetScale(params_.pPlotScale);
+//   plotter.SetPlotName("voronoi_map", step);
+//   plotter.PlotMap(GetWorldMap(), robot_global_positions_, voronoi_,
+//                   robot_positions_history_);
+// }
 
-void AdaptiveSystem::PlotMapVoronoi(std::string const &dir_name,
-                                    int const &step, Voronoi const &voronoi,
-                                    PointVector const &goals) const {
-  Plotter plotter(dir_name, params_.pWorldMapSize * params_.pResolution,
-                  params_.pResolution);
-  plotter.SetScale(params_.pPlotScale);
-  plotter.SetPlotName("map", step);
-  plotter.PlotMap(GetWorldMap(), robot_global_positions_, goals, voronoi);
-}
+// void AdaptiveSystem::PlotMapVoronoi(std::string const &dir_name,
+//                                     int const &step, Voronoi const &voronoi,
+//                                     PointVector const &goals) const {
+//   Plotter plotter(dir_name, params_.pWorldMapSize * params_.pResolution,
+//                   params_.pResolution);
+//   plotter.SetScale(params_.pPlotScale);
+//   plotter.SetPlotName("map", step);
+//   plotter.PlotMap(GetWorldMap(), robot_global_positions_, goals, voronoi);
+// }
 
 void AdaptiveSystem::PlotFrontiers(std::string const &dir_name, int const &step,
                                    PointVector const &frontiers) const {
@@ -800,33 +800,33 @@ PointVector AdaptiveSystem::GetRelativePositonsNeighbors(
   return relative_positions_neighbors_[robot_id];
 }
 
-std::vector<double> AdaptiveSystem::GetLocalVoronoiFeatures(
-    int const robot_id) {
-  auto const &pos = robot_global_positions_[robot_id];
-  MapUtils::MapBounds index, offset;
-  MapUtils::ComputeOffsets(params_.pResolution, pos, params_.pLocalMapSize,
-                           params_.pWorldMapSize, index, offset);
-  auto robot_map = robots_[robot_id].GetRobotMap();
-  auto trimmed_local_map =
-      robot_map.block(index.left + offset.left, index.bottom + offset.bottom,
-                      offset.width, offset.height);
-  Point2 map_size(offset.width, offset.height);
+// std::vector<double> AdaptiveSystem::GetLocalVoronoiFeatures(
+//     int const robot_id) {
+//   auto const &pos = robot_global_positions_[robot_id];
+//   MapUtils::MapBounds index, offset;
+//   MapUtils::ComputeOffsets(params_.pResolution, pos, params_.pLocalMapSize,
+//                            params_.pWorldMapSize, index, offset);
+//   auto robot_map = robots_[robot_id].GetRobotMap();
+//   auto trimmed_local_map =
+//       robot_map.block(index.left + offset.left, index.bottom + offset.bottom,
+//                       offset.width, offset.height);
+//   Point2 map_size(offset.width, offset.height);
 
-  Point2 map_translation((index.left + offset.left) * params_.pResolution,
-                         (index.bottom + offset.bottom) * params_.pResolution);
+//   Point2 map_translation((index.left + offset.left) * params_.pResolution,
+//                          (index.bottom + offset.bottom) * params_.pResolution);
 
-  auto robot_neighbors_pos = GetRobotsInCommunication(robot_id);
-  PointVector robot_positions(robot_neighbors_pos.size() + 1);
+//   auto robot_neighbors_pos = GetRobotsInCommunication(robot_id);
+//   PointVector robot_positions(robot_neighbors_pos.size() + 1);
 
-  robot_positions[0] = pos - map_translation;
-  int count = 1;
-  for (auto const &neighbor_pos : robot_neighbors_pos) {
-    robot_positions[count] = neighbor_pos - map_translation;
-    ++count;
-  }
-  Voronoi voronoi(robot_positions, trimmed_local_map, map_size,
-                  params_.pResolution, true, 0);
-  auto vcell = voronoi.GetVoronoiCell();
-  return vcell.GetFeatureVector();
-}
+//   robot_positions[0] = pos - map_translation;
+//   int count = 1;
+//   for (auto const &neighbor_pos : robot_neighbors_pos) {
+//     robot_positions[count] = neighbor_pos - map_translation;
+//     ++count;
+//   }
+//   Voronoi voronoi(robot_positions, trimmed_local_map, map_size,
+//                   params_.pResolution, true, 0);
+//   auto vcell = voronoi.GetVoronoiCell();
+//   return vcell.GetFeatureVector();
+// }
 }  // namespace CoverageControl

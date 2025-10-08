@@ -34,10 +34,12 @@
 #include <algorithm>
 #include <vector>
 
-#include "CoverageControl/algorithms/abstract_controller.h"
+#include "CoverageControl/constants.h"
+#include "CoverageControl/algorithms/abstract_controller_adaptive.h"
 #include "CoverageControl/adaptive_system.h"
 #include "CoverageControl/parameters.h"
 #include "CoverageControl/typedefs.h"
+#include "CoverageControl/action.h"
 
 namespace CoverageControl {
 
@@ -51,13 +53,15 @@ namespace CoverageControl {
  * It selects the next sampling location based on the largest gradient at the
  * edge of what the robot knows.
  */
-class ClairvoyantAdaptive : public AbstractController {
+class ClairvoyantAdaptive : public AbstractControllerAdaptive {
  private:
   Parameters const params_;
   size_t num_robots_ = 0;
   AdaptiveSystem &env_;
   PointVector robot_global_positions_;
-  PointVector goals_, actions_;
+  PointVector goals_;
+  std::vector<std::unique_ptr<Action>> actions_;
+  PointVector visited_goals_;  //!< List of previously visited goals (shared across all robots)
 
   bool is_converged_ = false;
 
@@ -73,107 +77,162 @@ class ClairvoyantAdaptive : public AbstractController {
     ComputeGoals();
   }
 
-  PointVector GetActions() { return actions_; }
+  std::vector<std::unique_ptr<Action>>& GetActions() { return actions_; }
 
   auto GetGoals() { return goals_; }
 
-  void ComputeGoals() {
-    // Implement the logic to find the largest gradient at the edge of what the robot knows
-    // for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
-    //   Point2 current_position = env_.GetRobotPosition(iRobot);
-    //   Point2 best_goal = current_position;
-    //   double max_gradient = -1.0; 
-      
-    //   // Search for the largest gradient in a neighborhood around the robot
-    //   int search_radius = params_.pResolution*50; // Define a radius for the search
-    //   for (int x = -search_radius; x <= search_radius; ++x) {
-    //     for (int y = -search_radius; y <= search_radius; ++y) {
-    //       Point2 candidate_position;
-    //       candidate_position[0] = current_position[0] + x * params_.pResolution;
-    //       candidate_position[1] = current_position[1] + y * params_.pResolution;
-
-    //       // Check if the candidate position is within the map bounds
-    //       if (candidate_position[0] >= 0 && candidate_position[0] < params_.pWorldMapSize * params_.pResolution &&
-    //           candidate_position[1] >= 0 && candidate_position[1] < params_.pWorldMapSize * params_.pResolution) {
-
-    //         // Calculate the gradient at the candidate position
-    //         Point2 gradient = env_.CalculateGradient(candidate_position);
-    //         double gradient_magnitude = gradient.norm();
-
-    //         // Update the best goal if the current gradient is larger than the maximum gradient found so far
-    //         if (gradient_magnitude > max_gradient) {
-    //           max_gradient = gradient_magnitude;
-    //           best_goal = candidate_position;
-    //         }
-    //       }
-    //     }
-    //   }
-    //   goals_[iRobot] = best_goal;
-    // }
-
+  Point2 ComputeGoal(size_t iRobot, PointVector const& active_goals) {
     // Implement the logic to find the largest importance in a neighborhood around the robot
     MapType const &world_map = env_.GetWorldMap(); // GetWorldMapMutable
 
-    for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
-      Point2 current_position = env_.GetRobotPosition(iRobot);
-      Point2 best_goal = current_position;
-      double max_importance = -1.0; 
-      
-      // Search for the largest gradient in a neighborhood around the robot
-      int search_radius = params_.pResolution*50; // Define a radius for the search
-      for (int x = -search_radius; x <= search_radius; ++x) {
-        for (int y = -search_radius; y <= search_radius; ++y) {
-          Point2 candidate_position;
-          candidate_position[0] = current_position[0] + x * params_.pResolution;
-          candidate_position[1] = current_position[1] + y * params_.pResolution;
+    Point2 current_position = env_.GetRobotPosition(iRobot);
+    Point2 best_goal = current_position;
+    double max_importance = -1.0;
 
-          // Check if the candidate position is within the map bounds
-          if (candidate_position[0] >= 0 && candidate_position[0] < params_.pWorldMapSize * params_.pResolution &&
-              candidate_position[1] >= 0 && candidate_position[1] < params_.pWorldMapSize * params_.pResolution) {
+    // Define a minimum distance threshold to consider a location as "visited"
+    double visited_threshold = params_.pResolution * params_.pSampleRadius;
 
-            // Find the IDF value at the candidate position
-            // Convert to indices
-            int i = static_cast<int>(candidate_position[0] / params_.pResolution);
-            int j = static_cast<int>(candidate_position[1] / params_.pResolution);
-            
-             // Safety check
-            //if (i >= 0 && i < params_.pWorldMapSize && j >= 0 && j < params_.pWorldMapSize) {
-            float importance = world_map(i, j);
+    // Calculate the search bounds to stay within the map
+    double world_size = params_.pWorldMapSize * params_.pResolution;
+    double max_search_dist = params_.pMaxSearchRadius;
 
-            // Update the best goal if the current importance is larger than the importance found so far
-            if (importance > max_importance) {
-              max_importance = importance;
-              best_goal = candidate_position;
-            }
-            //}
+    // Clamp search radius to map boundaries
+    int x_min = static_cast<int>(std::max(-max_search_dist, -current_position[0]) / params_.pResolution);
+    int x_max = static_cast<int>(std::min(max_search_dist, world_size - current_position[0]) / params_.pResolution);
+    int y_min = static_cast<int>(std::max(-max_search_dist, -current_position[1]) / params_.pResolution);
+    int y_max = static_cast<int>(std::min(max_search_dist, world_size - current_position[1]) / params_.pResolution);
+
+    // Search for the largest importance in a neighborhood around the robot
+    for (int x = x_min; x <= x_max; ++x) {
+      for (int y = y_min; y <= y_max; ++y) {
+        Point2 candidate_position;
+        candidate_position[0] = current_position[0] + x * params_.pResolution;
+        candidate_position[1] = current_position[1] + y * params_.pResolution;
+        // Position is guaranteed to be within bounds due to clamping above
+
+        // Check if this location has been visited before
+        bool already_visited = false;
+        for (auto const &visited_goal : visited_goals_) {
+          if ((candidate_position - visited_goal).norm() < visited_threshold) {
+            already_visited = true;
+            break;
           }
         }
+        if (already_visited) {
+          continue;  // Skip this candidate
+        }
+
+        // Check if this location is an active goal for another robot
+        bool is_active_goal = false;
+        for (auto const &goal : active_goals) {
+            if ((candidate_position - goal).norm() < visited_threshold) {
+                is_active_goal = true;
+                break;
+            }
+        }
+        if (is_active_goal) {
+            continue; // Skip this candidate
+        }
+
+        // Find the IDF value at the candidate position
+        // Convert to indices
+        int i = static_cast<int>(candidate_position[0] / params_.pResolution);
+        int j = static_cast<int>(candidate_position[1] / params_.pResolution);
+
+        float importance = world_map(i, j);
+
+        // Update the best goal if the current importance is larger than the importance found so far
+        if (importance > max_importance) {
+          max_importance = importance;
+          best_goal = candidate_position;
+        }
       }
-      goals_[iRobot] = best_goal;
+    }
+
+    // Update the goal for the robot
+    goals_[iRobot] = best_goal;
+    return best_goal;
+  }
+
+  void ComputeGoals() {
+    // Implement the logic to find the largest importance in a neighborhood around the robot
+    //MapType const &world_map = env_.GetWorldMap(); // GetWorldMapMutable
+
+    // For each robot, compute the best goal
+    //#pragma omp parallel for
+    PointVector active_goals;
+
+    for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
+      Point2 newGoal = ComputeGoal(iRobot, active_goals); //Point2 best_goal = 
+      active_goals.push_back(newGoal);
+      //goals_[iRobot] = best_goal;
     }
   }
 
-  int ComputeActions() {
-    is_converged_ = true;
-    robot_global_positions_ = env_.GetRobotPositions();
-    ComputeGoals();
-    for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
-      actions_[iRobot] = Point2(0, 0);
-      Point2 diff = goals_[iRobot] - robot_global_positions_[iRobot];
-      double dist = diff.norm();
-      if (dist < kEps) {
-        continue;
-      }
-      if (env_.CheckOscillation(iRobot)) {
-        continue;
-      }
-      double speed = dist / params_.pTimeStep;
-      speed = std::min(params_.pMaxRobotSpeed, speed);
-      Point2 direction(diff);
-      direction.normalize();
-      actions_[iRobot] = speed * direction;
-      is_converged_ = false;
 
+  int ComputeActions(int current_step) {
+    is_converged_ = false; //true;  // Assume convergence until a robot takes an action
+    robot_global_positions_ = env_.GetRobotPositions();
+
+    // Build a list of all goals that are currently being pursued
+    PointVector active_goals;
+    for (size_t i = 0; i < num_robots_; ++i) {
+        if (actions_[i] != nullptr) {
+            active_goals.push_back(actions_[i]->GetTargetPosition());
+        }
+    }
+
+    for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
+      Point2 current_pos = robot_global_positions_[iRobot];
+      auto& current_action = actions_[iRobot];
+
+      // State 1: Robot is MOVING
+      if (current_action != nullptr && current_action->GetActionType() == "Move") {
+        if (current_action->IsComplete(current_step, params_, current_pos)) {
+          // Reached goal, transition to sampling state //current_action = nullptr;  
+          current_action = std::make_unique<SampleAction>(current_pos);
+          current_action->SetStartTime(current_step);
+          is_converged_ = false;  // Taking an action
+        } else {
+          is_converged_ = false;  // Still moving
+          continue;               // Continue with the current MoveAction
+        }
+      }
+
+      // State 2: Robot is SAMPLING
+      else if (current_action != nullptr && current_action->GetActionType() == "Sample") {
+        auto* sample_action = static_cast<SampleAction*>(current_action.get());
+        if (sample_action->IsComplete(current_step, params_, current_pos)) {
+          visited_goals_.push_back(goals_[iRobot]); // GOAL IS VISITED ONLY AFTER SAMPLING IS COMPLETE
+          
+          // Sampling done, transition to moving state
+          //current_action = nullptr;  
+          ComputeGoal(iRobot, active_goals);
+          Point2 new_goal = goals_[iRobot];
+
+          current_action = std::make_unique<MoveAction>(new_goal);
+          active_goals.push_back(new_goal); // Add to active goals for this step
+          is_converged_ = false;  // Taking an action
+        } else {
+          // Start the sampling timer if it hasn't been started
+          if (!sample_action->IsStarted()) {
+            sample_action->SetStartTime(current_step);
+          }
+          is_converged_ = false;  // Still sampling
+          continue;               // Continue with the current SampleAction
+        }
+      }
+
+      // State 3: Robot is IDLE (no action) -> Decide what to do next
+      else if (current_action == nullptr) {
+        // The robot is idle, so it needs a new goal.
+        ComputeGoal(iRobot, active_goals);
+        Point2 new_goal = goals_[iRobot];
+
+        current_action = std::make_unique<MoveAction>(new_goal);
+        active_goals.push_back(new_goal); // Add to active goals for this step
+        is_converged_ = false;  // Taking an action
+      }
     }
     return 0;
   }

@@ -52,6 +52,7 @@
 #include "CoverageControl/typedefs.h"
 #include "CoverageControl/voronoi.h"
 #include "CoverageControl/world_idf.h"
+#include "CoverageControl/action.h"
 
 namespace CoverageControl {
 
@@ -68,8 +69,8 @@ class AdaptiveSystem {
   size_t num_robots_ = 0;            //!< Number of robots
   std::vector<RobotModel> robots_;   //!< Vector of robots of type RobotModel
   double normalization_factor_ = 0;  //!< Normalization factor for the world IDF
-  Voronoi voronoi_;                  //!< Voronoi object
-  std::vector<VoronoiCell> voronoi_cells_;  //!< Voronoi cells for each robot
+  //Voronoi voronoi_;                  //!< Voronoi object
+  //std::vector<VoronoiCell> voronoi_cells_;  //!< Voronoi cells for each robot
   mutable std::random_device
       rd_;                    //!< Random device for random number generation
   mutable std::mt19937 gen_;  //!< Mersenne Twister random number generator
@@ -298,45 +299,106 @@ public:
    * \param actions Vector of actions for all robots
    * \return 0 if successful, 1 if control is incorrect
    */
-  [[nodiscard]] bool StepActions(PointVector const &actions) {
-    for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
-      Point2 action = actions[iRobot];
-      double speed = action.norm();
-      Point2 direction = action.normalized();
-      if (robots_[iRobot].StepControl(direction, speed)) {
+  // [[nodiscard]] bool StepActions(PointVector const &actions) {
+  //   for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
+  //     Point2 action = actions[iRobot];
+  //     double speed = action.norm();
+  //     Point2 direction = action.normalized();
+  //     if (robots_[iRobot].StepControl(direction, speed)) {
+  //       std::cerr << "Control incorrect\n";
+  //       return 1;
+  //     }
+
+  //     // TODO: MOVE INTO POST STEP COMMANDS
+  //     TakeSample(iRobot); // Robot take sample where it currently is
+  //   }
+    
+  //   PostStepCommands();
+  //   return 0;
+  // }
+
+  // /*!
+  //  * \brief Execute given action for robot_id
+  //  *
+  //  * \warning If the function returns 1 (control is incorrect), the system state
+  //  * is not updated
+  //  *
+  //  * \param robot_id ID of the robot
+  //  * \param action Action for the robot
+  //  * \return 0 if successful, 1 if control is incorrect
+  //  */
+  // [[nodiscard]] bool StepAction(size_t const robot_id, Point2 const action) {
+  //   double speed = action.norm();
+  //   Point2 direction = action.normalized();
+  //   if (robots_[robot_id].StepControl(direction, speed)) {
+  //     std::cerr << "Control incorrect\n";
+  //     return 1;
+  //   }
+
+  //   // TODO: MOVE INTO POST STEP COMMANDS
+  //   TakeSample(robot_id); // Robot take sample where it currently is
+
+  //   PostStepCommands();
+  //   return 0;
+  // }
+
+  /*!
+   * \brief Execute action for a single robot using Action object
+   *
+   * \param robot_id ID of the robot
+   * \param action Pointer to the Action object
+   * \param current_step Current simulation step
+   * \return 0 if successful, 1 if control is incorrect
+   */
+  [[nodiscard]] bool StepAction(size_t const robot_id, Action const *action, int current_step) {
+    if (action == nullptr) {
+      return 0; // No action, nothing to do
+    }
+
+    // Print action type
+    std::cout << "Robot " << robot_id << " at step " << current_step << ": "
+              << action->GetActionType() << std::endl;
+
+    // Pre-action
+    Point2 current_pos = robots_[robot_id].GetGlobalCurrentPosition();
+
+    // If sampling action is complete, take a sample
+    if (action->GetActionType() == "Sample") {
+      auto* sample_action = const_cast<SampleAction*>(static_cast<SampleAction const*>(action));
+      if (sample_action->ReadyToSample(current_step, params_)) {
+        TakeSample(robot_id);
+        sample_action->TakeSample();
+      }
+    } else if(action->GetActionType() == "Move"){ // Otherwise, move
+      Point2 velocity = action->GetVelocityAction(current_pos, params_);
+
+      double speed = velocity.norm();
+      Point2 direction = (speed > kEps) ? velocity.normalized() : Point2(0, 0);
+
+      if (robots_[robot_id].StepControl(direction, speed)) {
         std::cerr << "Control incorrect\n";
         return 1;
       }
-
-      // TODO: MOVE INTO POST STEP COMMANDS
-      TakeSample(iRobot); // Robot take sample where it currently is
     }
-    
-    PostStepCommands();
+
+    // Don't call PostStepCommands here - it will be called once for all robots in StepActions
     return 0;
   }
 
   /*!
-   * \brief Execute given action for robot_id
+   * \brief Execute actions for all robots using Action objects
    *
-   * \warning If the function returns 1 (control is incorrect), the system state
-   * is not updated
-   *
-   * \param robot_id ID of the robot
-   * \param action Action for the robot
-   * \return 0 if successful, 1 if control is incorrect
+   * \param actions Vector of Action pointers for all robots
+   * \param current_step Current simulation step
+   * \return 0 if successful, 1 if any control is incorrect
    */
-  [[nodiscard]] bool StepAction(size_t const robot_id, Point2 const action) {
-    double speed = action.norm();
-    Point2 direction = action.normalized();
-    if (robots_[robot_id].StepControl(direction, speed)) {
-      std::cerr << "Control incorrect\n";
-      return 1;
+  [[nodiscard]] bool StepActions(std::vector<std::unique_ptr<Action>> const &actions, int current_step) {
+    for (size_t iRobot = 0; iRobot < num_robots_; ++iRobot) {
+      if (StepAction(iRobot, actions[iRobot].get(), current_step)) {
+        return 1;
+      }
     }
-
-    // TODO: MOVE INTO POST STEP COMMANDS
-    TakeSample(robot_id); // Robot take sample where it currently is
-    
+    // Update all robot positions and neighbors once after all robots have stepped
     PostStepCommands();
     return 0;
   }
@@ -398,13 +460,13 @@ public:
     }
   }
 
-  void ComputeVoronoiCells() {
-    UpdateRobotPositions();
-    voronoi_ = Voronoi(robot_global_positions_, GetWorldMap(),
-                       Point2(params_.pWorldMapSize, params_.pResolution),
-                       params_.pResolution);
-    voronoi_cells_ = voronoi_.GetVoronoiCells();
-  }
+  // void ComputeVoronoiCells() {
+  //   UpdateRobotPositions();
+  //   voronoi_ = Voronoi(robot_global_positions_, GetWorldMap(),
+  //                      Point2(params_.pWorldMapSize, params_.pResolution),
+  //                      params_.pResolution);
+  //   voronoi_cells_ = voronoi_.GetVoronoiCells();
+  // }
 
   /*!
    * Step a robot towards a given goal
@@ -664,10 +726,10 @@ public:
     return features;
   }
 
-  auto GetVoronoiCells() { return voronoi_cells_; }
-  Voronoi &GetVoronoi() { return voronoi_; }
+  // auto GetVoronoiCells() { return voronoi_cells_; }
+  // Voronoi &GetVoronoi() { return voronoi_; }
 
-  auto GetVoronoiCell(int const robot_id) { return voronoi_cells_[robot_id]; }
+  // auto GetVoronoiCell(int const robot_id) { return voronoi_cells_[robot_id]; }
 
   double GetNormalizationFactor() {
     normalization_factor_ = world_idf_ptr_->GetNormalizationFactor();

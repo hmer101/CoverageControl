@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
 
   std::unique_ptr<CoverageControl::AdaptiveSystem> env;
 
-  std::cout << "1" << std::endl;
+  //std::cout << "1" << std::endl;
 
   if (argc == 3) {
     std::cerr << "Please provide both position and IDF files" << std::endl;
@@ -74,12 +74,12 @@ int main(int argc, char** argv) {
     env = std::make_unique<CoverageControl::AdaptiveSystem>(params);
   }
 
-  std::cout << "2" << std::endl;
+  //std::cout << "2" << std::endl;
 
   auto init_objective = env->GetObjectiveValue();
 
   // Plot initial map
-  std::cout << "About to plot init map" << std::endl;
+  //std::cout << "About to plot init map" << std::endl;
   std::string output_dir = "/marl_sim_basic/output_cpp";
   std::string init_filename = "as_system_start";
   std::string gradient_filename = "as_system_grad";
@@ -97,12 +97,12 @@ int main(int argc, char** argv) {
 
 
   AdaptiveAlgorithm algorithm(params, *env);
-  auto goals = algorithm.GetGoals();
+  auto goals = algorithm.GetGoals(); 
 
   for (int ii = 0; ii < params.pEpisodeSteps; ++ii) {
-    algorithm.ComputeActions();
-    auto actions = algorithm.GetActions();
-    if (env->StepActions(actions)) {
+    algorithm.ComputeActions(ii);
+    auto& actions = algorithm.GetActions();
+    if (env->StepActions(actions, ii)) {
       std::cout << "Invalid action" << std::endl;
       break;
     }
@@ -113,6 +113,8 @@ int main(int argc, char** argv) {
     if (algorithm.IsConverged()) {
       break;
     }
+
+    //goals = algorithm.GetGoals(); // Need to continuously compute goals?
   }
 
   // Print improvement in objective value

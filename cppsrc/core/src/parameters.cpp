@@ -190,6 +190,7 @@ void Parameters::ParseParameters() {
     auto toml_SensorSize = toml_RobotModel["SensorSize"].value<int>();
     auto toml_CommunicationRange =
         toml_RobotModel["CommunicationRange"].value<double>();
+    auto toml_MaxSearchRadius = toml_RobotModel["MaxSearchRadius"].value<double>();
     auto toml_MaxRobotSpeed = toml_RobotModel["MaxRobotSpeed"].value<double>();
     auto toml_RobotInitDist = toml_RobotModel["RobotInitDist"].value<double>();
     auto toml_RobotPosHistorySize =
@@ -201,6 +202,9 @@ void Parameters::ParseParameters() {
     }
     if (toml_CommunicationRange) {
       pCommunicationRange = toml_CommunicationRange.value();
+    }
+    if (toml_MaxSearchRadius) {
+      pMaxSearchRadius = toml_MaxSearchRadius.value();
     }
     if (toml_MaxRobotSpeed) {
       pMaxRobotSpeed = toml_MaxRobotSpeed.value();
@@ -258,6 +262,21 @@ void Parameters::ParseParameters() {
       pNumFrontiers = toml_NumFrontiers.value();
     }
   }
+
+
+  auto toml_Actions = toml_config["Actions"];
+
+  if (toml_Actions) {
+    auto toml_SampleDuration = toml_Actions["SampleDuration"].value<int>();
+    if (toml_SampleDuration) {
+      pSampleDuration = toml_SampleDuration.value();
+    }
+
+    auto toml_SampleRadius = toml_Actions["SampleRadius"].value<int>();
+    if (toml_SampleRadius) {
+      pSampleRadius = toml_SampleRadius.value();
+    }
+  }
 }
 
 void Parameters::PrintParameters() const {
@@ -296,6 +315,7 @@ void Parameters::PrintParameters() const {
 
   std::cout << "SensorSize: " << pSensorSize << std::endl;
   std::cout << "CommunicationRange: " << pCommunicationRange << std::endl;
+  std::cout << "MaxSearchRadius: " << pMaxSearchRadius << std::endl;
   std::cout << "MaxRobotSpeed: " << pMaxRobotSpeed << std::endl;
   std::cout << "RobotInitDist: " << pRobotInitDist << std::endl;
   std::cout << "RobotPosHistorySize: " << pRobotPosHistorySize << std::endl;
@@ -309,5 +329,8 @@ void Parameters::PrintParameters() const {
   std::cout << "LloydMaxIterations: " << pLloydMaxIterations << std::endl;
   std::cout << "LloydNumTries: " << pLloydNumTries << std::endl;
   std::cout << "NumFrontiers: " << pNumFrontiers << std::endl;
+
+  std::cout << "SampleRadius: " << pSampleRadius << std::endl;
+  std::cout << "SampleDuration: " << pSampleDuration << std::endl;
 }
 } /* namespace CoverageControl */

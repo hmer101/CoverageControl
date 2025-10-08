@@ -1,5 +1,5 @@
 # Specify parameters for coverage control in toml format
-NumRobots = 1 #32
+NumRobots = 4 #1 #32
 
 [IO]
 # Determines the quality of the plot and videos
@@ -12,7 +12,7 @@ PlotScale = 1.0 #0.1
 
 [Environment.Maps]
 # Assuming same resolution in both the directions. Pixel area = Resolution^2
-# Resolution is in m/pixel (where pixel is a discrete unit of the map)
+# Resolution is in m/pixel (where pixel is a discrete unit of the map). FEELS LIKE THIS SHOULD BE PIXEL/M???
 Resolution = 1
 
 # Actual size of maps is size * Resolution, e.g.,  WorldMapSize * Resolution
@@ -71,7 +71,8 @@ SensorSize = 100 #64 # Positive integer. NOTE: Needs to be even
 # Radius of communication (in meters)
 CommunicationRange = 128
 
-MaxRobotSpeed = 5 # in m/s. Make sure MaxRobotSpeed * TimeStep / Resolution < SensorSize/2
+MaxSearchRadius = 100 #Maximum distance within which to consider next sample points (m)
+MaxRobotSpeed = 1 #5 # in m/s. Make sure MaxRobotSpeed * TimeStep / Resolution < SensorSize/2
 RobotInitDist = 50 #1024 # Distance from the origin within which to initialize the position of the robots
 RobotPosHistorySize = 40 # For plotting and checking oscillations
 
@@ -87,7 +88,7 @@ PositionsNoiseSigma = 0.1
 [Algorithm]
 
 # Number of steps in an episode
-EpisodeSteps = 2100
+EpisodeSteps = 250 #500 #2100
 CheckOscillations = true
 
 [Algorithm.Global-CVT]
@@ -98,3 +99,10 @@ LloydNumTries = 20
 [Algorithm.Exploration]
 # Number of frontiers to be selected (not used currently)
 NumFrontiers = 10
+
+
+[Actions]
+# Sampling action
+SampleDuration = 20 #10 #in seconds
+SampleRadius = 10 #4 # Radius around a sample point where not to take another sample (in m)
+

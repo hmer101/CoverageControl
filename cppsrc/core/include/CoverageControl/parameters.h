@@ -132,6 +132,7 @@ class Parameters {
   // pResolution)/2
   int pSensorSize = 64;  //! \warning Positive integer. NOTE: Needs to be even
   double pCommunicationRange = 128;  //!< Radius of communication (in meters)
+  double pMaxSearchRadius = 100; //Maximum distance within which to consider next sample points (m)
   // in m/s. Make sure pMaxRobotSpeed * pTimeStep / pResolution < pSensorSize/2
   double pMaxRobotSpeed = 5;
   double pRobotInitDist = 1024;   //!< Distance from the origin within which to
@@ -166,6 +167,13 @@ class Parameters {
    */
   int pNumFrontiers = 10;  // Number of frontiers to be selected
                            /*! @} */
+
+  /*! \name Adaptive Sampling
+   * @{
+   */
+  int pSampleDuration = 10;  // Number of seconds to sample at a location
+                            /*! @} */
+  int pSampleRadius = 4; // Radius around a sample point where not to take another sample (in m)
 
   /*! @} */
   Parameters() {}
