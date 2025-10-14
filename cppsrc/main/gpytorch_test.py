@@ -4,6 +4,7 @@ import gpytorch
 from matplotlib import pyplot as plt
 import os
 import numpy as np
+import time
 
 import plotly.io as pio
 import geopandas as gpd
@@ -13,6 +14,7 @@ import pandas as pd
 #from mpl_toolkits.mplot3d import Axes3D  # this activates 3D projection
 
 import pyvista as pv
+import pyvistaqt as pvqt
 import pymap3d as pm
 import vtk
 
@@ -246,10 +248,41 @@ def load_data(data_path, num_samples=-1, percent_train=0.8, normalize=False):
     return train_x, train_y, test_x, test_y, normalization_params
 
 ### TRAINING ###
-def train(model, likelihood, train_x, train_y, lr=0.1,training_iter=50, patience=50, min_delta=1e-4):
+def train(model, likelihood, train_x, train_y, lr=0.1, training_iter=50, patience=50, min_delta=1e-4,
+          warm_start=False, prev_model=None, plot_loss=True):
+    """
+    Train a GP model.
+
+    Parameters
+    ----------
+    model : ExactGPModel
+        Model to train
+    likelihood : GaussianLikelihood
+        Likelihood function
+    train_x, train_y : torch.Tensor
+        Training data
+    lr : float
+        Learning rate
+    training_iter : int
+        Maximum number of training iterations
+    patience : int
+        Early stopping patience
+    min_delta : float
+        Minimum improvement for early stopping
+    warm_start : bool
+        If True, initialize hyperparameters from prev_model
+    prev_model : ExactGPModel, optional
+        Previous model to copy hyperparameters from (required if warm_start=True)
+    plot_loss : bool
+        If True, plot the loss curve after training
+    """
     # Find optimal model hyperparameters
     model.train()
     likelihood.train()
+
+    # Warm start: copy hyperparameters from previous model
+    if warm_start and prev_model is not None:
+        model.load_state_dict(prev_model.state_dict())
 
     # Use the adam optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # Includes GaussianLikelihood parameters
@@ -274,7 +307,7 @@ def train(model, likelihood, train_x, train_y, lr=0.1,training_iter=50, patience
         losses.append(loss_value)
 
         # Print all hyperparameters
-        lengthscale = model.covar_module.base_kernel.lengthscale.detach().cpu().numpy()
+        lengthscale = model.covar_module.base_kernel.lengthscale.item() #.detach().cpu().numpy()
         outputscale = model.covar_module.outputscale.item()
         noise = model.likelihood.noise.item()
 
@@ -288,9 +321,9 @@ def train(model, likelihood, train_x, train_y, lr=0.1,training_iter=50, patience
             mean_param = "N/A"
 
         print(f"Iter {i + 1}/{training_iter} - Loss: {loss.item():.3f} "
-            f"  lengthscale: {model.covar_module.base_kernel.lengthscale.item():.3f} "
-            f"  outputscale: {model.covar_module.outputscale.item():.3f} "
-            f"  noise: {model.likelihood.noise.item():.3f} "
+            f"  lengthscale: {lengthscale:.3f} "
+            f"  outputscale: {outputscale:.3f} "
+            f"  noise: {noise:.3f} "
             f"  mean: {mean_param}")
         optimizer.step()
 
@@ -303,18 +336,64 @@ def train(model, likelihood, train_x, train_y, lr=0.1,training_iter=50, patience
 
         if patience_counter >= patience:
             print(f'\nEarly stopping at iteration {i+1}. No improvement for {patience} iterations.')
-            
-            # Plot loss curve
-            #plot_loss_curve(losses)
-            
             break
 
-
-
     # Plot loss curve
-    plot_loss_curve(losses)
+    if plot_loss:
+        plot_loss_curve(losses)
 
     return losses
+
+def update_model_with_new_data(prev_model, likelihood, new_x, new_y,
+                               train_x, train_y, device,
+                               lr=0.01, training_iter=50, patience=50, min_delta=1e-4, plot_loss=True):
+    """
+    Add new observations to the model and perform a quick hyperparameter update.
+
+    Parameters
+    ----------
+    prev_model : ExactGPModel
+        Current trained model
+    likelihood : GaussianLikelihood
+        Current likelihood
+    new_x, new_y : torch.Tensor
+        New observations to add (should be on same device as train_x/train_y)
+    train_x, train_y : torch.Tensor
+        Current training data
+    device : torch.device
+        Device to use (CPU or CUDA)
+    lr : float
+        Learning rate for update (typically smaller than initial training)
+    training_iter : int
+        Number of optimization iterations (typically much smaller than initial training)
+    patience : int
+        Early stopping patience
+    min_delta : float
+        Minimum improvement for early stopping
+    plot_loss : bool
+        If True, plot the loss curve after training
+
+    Returns
+    -------
+    updated_model : ExactGPModel
+        Model with new data and updated hyperparameters
+    train_x, train_y : torch.Tensor
+        Updated training data
+    """
+    # Concatenate new data with existing training data
+    train_x = torch.cat([train_x, new_x])
+    train_y = torch.cat([train_y, new_y])
+
+    # Create new model with updated data
+    updated_model = ExactGPModel(train_x, train_y, likelihood).to(device)
+
+    # Train with warm start from previous model
+    train(updated_model, likelihood, train_x, train_y,
+          lr=lr, training_iter=training_iter, patience=patience, min_delta=min_delta,
+          warm_start=True, prev_model=prev_model, plot_loss=plot_loss)
+
+    return updated_model, train_x, train_y
+
 
 ### TESTING / PREDICTION ###
 def generate_eval_grid(train_x, test_x, num_points=50):
@@ -404,7 +483,8 @@ def plot_surface_matplotlib(grid_lon, grid_lat, mean, train_x=None, train_y=None
     plt.show()
 
 def plot_surface(grid_east, grid_north, mean, train_x=None, train_y=None, test_x=None, test_y=None,
-                 stddev=None, plot_cis=False, lower=None, upper=None, z_scale_factor=100, clim=None):
+                 stddev=None, plot_cis=False, lower=None, upper=None, z_scale_factor=100, clim=None,
+                 block=True, title_suffix="", plotter=None):
     """
     Plot the GP mean surface in 3D using PyVista (OpenGL-accelerated).
     Data is assumed to already be in ENU coordinates (meters).
@@ -425,8 +505,21 @@ def plot_surface(grid_east, grid_north, mean, train_x=None, train_y=None, test_x
         Lower and upper confidence bounds (for plotting confidence surfaces).
     z_scale_factor : float
         Exaggeration factor for z-axis.
-    normalization_params : dict or None
-        If provided, denormalize the data before plotting.
+    clim : list, optional
+        Color limits [min, max] for consistent color mapping.
+    block : bool
+        If True (default), blocks execution until window is closed.
+        If False, opens window non-blocking for side-by-side viewing.
+    title_suffix : str
+        Additional text to append to the plot title.
+    plotter : pv.Plotter or pvqt.BackgroundPlotter, optional
+        Existing plotter to update. If provided, the plotter will be cleared and reused
+        instead of creating a new one. Useful for real-time updates.
+
+    Returns
+    -------
+    plotter : pv.Plotter or pv.BackgroundPlotter
+        The plotter object (only returned for non-blocking mode or when reusing plotter)
     """
 
     # Ensure numpy arrays
@@ -443,10 +536,17 @@ def plot_surface(grid_east, grid_north, mean, train_x=None, train_y=None, test_x
     #grid["Soil Moisture"] = mean.ravel()
     grid["Soil Moisture"] = mean.ravel(order="F")  # ensure Fortran order (y-major)
 
-    # --- Create PyVista plotter ---
+    # --- Create or reuse PyVista plotter ---
     cmap = 'RdYlGn'
 
-    plotter = pv.Plotter(window_size=[900, 700])
+    # If plotter is provided, clear it and reuse
+    if plotter is not None:
+        plotter.clear()
+    # Otherwise create new plotter
+    elif not block:
+        plotter = pvqt.BackgroundPlotter(window_size=(900, 700), title=title_suffix if title_suffix else "GP Surface")
+    else:
+        plotter = pv.Plotter(window_size=[900, 700])
     plotter.add_mesh(
         grid,
         scalars="Soil Moisture",
@@ -549,7 +649,11 @@ def plot_surface(grid_east, grid_north, mean, train_x=None, train_y=None, test_x
         plotter.add_mesh(grid_lower, color='lightblue', opacity=0.2, label='95% CI Lower')
         plotter.add_mesh(grid_upper, color='lightblue', opacity=0.2, label='95% CI Upper')
 
-    plotter.add_text("Gaussian Process Soil Moisture Surface", position="upper_edge", font_size=12)
+    # Add title with optional suffix
+    title_text = "Gaussian Process Soil Moisture Surface"
+    if title_suffix:
+        title_text += f" - {title_suffix}"
+    plotter.add_text(title_text, position="upper_edge", font_size=12)
 
     # Build legend based on what's plotted
     legend_entries = [["Predicted Surface", "w"]]
@@ -568,8 +672,14 @@ def plot_surface(grid_east, grid_north, mean, train_x=None, train_y=None, test_x
     #     (-0.11084653681453323, 0.13455236898636372, 0.9846871103433731),  # view up
     # ]
 
-    plotter.show()
-    #print(plotter.camera_position)
+    # Show plot with blocking or non-blocking mode
+    if block and plotter is not None:
+        plotter.show()
+        return None
+    else:
+        # For non-blocking mode or when reusing plotter: return plotter to keep reference alive
+        # BackgroundPlotter from pyvistaqt shows automatically when created
+        return plotter
 
 def plot_loss_curve(losses):
     plt.figure(figsize=(10, 6))
@@ -670,7 +780,7 @@ def print_scaled_hyperparameters(model, likelihood, normalization_params=None):
         else:
             print(f"Mean: {mean_param}")
 
-def evaluate_model(model, likelihood, test_x, test_y, normalization_params=None):
+def evaluate_model(model, likelihood, test_x, test_y, normalization_params=None, plot_results=True):
     """
     Evaluate model performance on test data.
 
@@ -686,6 +796,8 @@ def evaluate_model(model, likelihood, test_x, test_y, normalization_params=None)
         True test output values (N,)
     normalization_params : dict or None
         If provided, denormalize predictions for evaluation
+    plot_results : bool
+        If True, plot true vs predicted scatter plot
 
     Returns
     -------
@@ -726,24 +838,25 @@ def evaluate_model(model, likelihood, test_x, test_y, normalization_params=None)
     coverage = 100.0 * within_ci / len(test_y_np)
 
     # Plot true vs predicted
-    plt.figure(figsize=(8, 8))
+    if plot_results:
+        plt.figure(figsize=(8, 8))
 
-    # Scatter plot
-    plt.scatter(test_y_np, pred_mean_np, alpha=0.5, s=20)
+        # Scatter plot
+        plt.scatter(test_y_np, pred_mean_np, alpha=0.5, s=20)
 
-    # Perfect prediction line
-    min_val = min(test_y_np.min(), pred_mean_np.min())
-    max_val = max(test_y_np.max(), pred_mean_np.max())
-    plt.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+        # Perfect prediction line
+        min_val = min(test_y_np.min(), pred_mean_np.min())
+        max_val = max(test_y_np.max(), pred_mean_np.max())
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
 
-    plt.xlabel('True Moisture (%)', fontsize=12)
-    plt.ylabel('Predicted Moisture (%)', fontsize=12)
-    plt.title(f'True vs Predicted Moisture\nRMSE: {rmse:.3f}, Coverage: {coverage:.1f}%', fontsize=14)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.axis('equal')
-    plt.tight_layout()
-    plt.show(block=False)
+        plt.xlabel('True Moisture (%)', fontsize=12)
+        plt.ylabel('Predicted Moisture (%)', fontsize=12)
+        plt.title(f'True vs Predicted Moisture\nRMSE: {rmse:.3f}, Coverage: {coverage:.1f}%', fontsize=14)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.axis('equal')
+        plt.tight_layout()
+        plt.show(block=False)
 
     print(f"\n=== Model Evaluation ===")
     print(f"RMSE: {rmse:.4f}")
@@ -756,101 +869,356 @@ def evaluate_model(model, likelihood, test_x, test_y, normalization_params=None)
 ### MAIN FUNCTION ###
 def main():
     # PARAMETERS
+    # 'Dads' is about 60 acres
     data_path = '/marl_sim_basic/data/soil_moisture/jason_soil_data/2024_North_of_shop_Dads_Export_20250630_1310_soil_moisture/Frantom Farm_Dads_North of sho_Harvest_2024-10-03_00.shp'
 
     # General options
     normalize_data_flag=True
 
+    #####
     # Training parameters
-    num_samples=5000 #-1 (GPU out of memory data is 16,465 long) #500
-    percent_train=0.8
-
-    lr=0.005 #0.1 - not normalized, 0.005 - normalized
-    training_iter=4000 #2500 #5000 #500 #5000
-    min_delta=1e-4
-    patience=1000 #200 #For normalized: 1000, for unnormalized: 200
-
+    #####
+    # Where to train
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    num_samples=5000 #-1 (GPU out of memory data is 16,465 long) #500
+    percent_train=0.8
+
+    # Initial training parameters (for first 10% of data)
+    lr_initial=0.005 #0.1 - not normalized, 0.005 - normalized
+    training_iter_initial=4000 #2500 #5000 #500 #5000
+    min_delta=1e-4
+    patience_initial=1000 #200 #For normalized: 1000, for unnormalized: 200
+
+    #####
+    # Update parameters
+    #####
+    # Update parameters
+    lr_update=0.01  # Slightly higher LR for quick updates
+    training_iter_update=200  # Much fewer iterations for updates
+    patience_update=50
+
+    # Incremental training parameters
+    enable_incremental = False #True  # Set to False to use original behavior
+    num_chunks = 8  # Train on 10%, 20%, 30%, ..., 80% of data
+
+    # Real-time single-point update mode
+    enable_realtime_single_point = True #False  # Set to True to add points one-by-one with live plot updates
+    realtime_pause_seconds = 0.0 #0.5  # Pause between adding each point
+    realtime_max_points = 500 #100  # Maximum number of points to add in real-time mode
+    realtime_update_interval = 1  # Update model every N points (1 = every point, 5 = every 5 points, etc.)
+
+
+    #####
     # Visualization parameters
+    #####
     z_scale_factor=50 #100 # For exaggerating z-axis in 3D plot
     clim = [16.3, 18.4] # color limits for consistent color mapping with John Deere operations center data
-    plot_cis=False
+    plot_cis=True #False
+
+    # Plot control flags
+    plot_training_diagnostics = False  # Set to False to disable loss curves and eval plots during incremental training
 
 
     # LOAD DATA
-    train_x, train_y, test_x, test_y, normalization_params = load_data(
+    train_x_full, train_y_full, test_x, test_y, normalization_params = load_data(
         data_path,
         num_samples=num_samples,
         percent_train=percent_train,
         normalize=normalize_data_flag
     )
 
-    # initialize likelihood and model
-    likelihood = gpytorch.likelihoods.GaussianLikelihood()
-    model = ExactGPModel(train_x, train_y, likelihood)
+    # Move test data to device once
+    test_x = test_x.to(device)
+    test_y = test_y.to(device)
 
-    # Move model, likelihood, and data to the selected device
-    model.to(device)
-    likelihood.to(device)
-    train_x = train_x.to(device)
-    train_y = train_y.to(device)
+    if enable_realtime_single_point:
+        # REAL-TIME SINGLE-POINT UPDATE MODE
+        print(f"\n{'='*60}")
+        print(f"REAL-TIME SINGLE-POINT UPDATE MODE")
+        print(f"Adding up to {realtime_max_points} points one at a time")
+        print(f"Update interval: every {realtime_update_interval} point(s)")
+        print(f"Pause between updates: {realtime_pause_seconds} seconds")
+        print(f"{'='*60}\n")
 
-    # TRAIN
-    train(model, likelihood, train_x, train_y, lr=lr, training_iter=training_iter, patience=patience, min_delta=min_delta)
+        # Start with first point
+        train_x_current = train_x_full[:1].to(device)
+        train_y_current = train_y_full[:1].to(device)
 
-    # PRINT SCALED HYPERPARAMETERS
-    print_scaled_hyperparameters(model, likelihood, normalization_params)
+        likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
+        model = ExactGPModel(train_x_current, train_y_current, likelihood).to(device)
 
-    # EVALUATE ON TEST SET (if test data exists)
-    if len(test_x) > 0:
-        # Move test data to device
-        test_x_device = test_x.to(device)
-        test_y_device = test_y.to(device)
-        rmse, coverage = evaluate_model(model, likelihood, test_x_device, test_y_device, normalization_params)
+        # Initial quick training
+        print(f"Initial training with 1 point...")
+        train(model, likelihood, train_x_current, train_y_current,
+              lr=lr_update, training_iter=50, patience=10, min_delta=min_delta, plot_loss=False)
 
+        # Create single BackgroundPlotter that we'll update
+        plotter = pvqt.BackgroundPlotter(window_size=(900, 700), title="Real-time GP Update")
 
-    # GENERATE EVAL POINTS
-    model.eval()
-    likelihood.eval()
+        # Determine how many points to add
+        n_points_to_add = min(realtime_max_points, len(train_x_full) - 1)
 
-    grid_eval_x, grid_eval_y, eval_points = generate_eval_grid(
-        train_x,
-        test_x,
-        num_points=50
-    )
+        for point_idx in range(1, n_points_to_add + 1):
+            print(f"\rAdding point {point_idx}/{n_points_to_add}...", end='', flush=True)
 
-    # Move test points to device
-    eval_points = eval_points.to(device)
+            # Add new point
+            new_x = train_x_full[point_idx:point_idx+1].to(device)
+            new_y = train_y_full[point_idx:point_idx+1].to(device)
 
+            # Update model every N points
+            if point_idx % realtime_update_interval == 0 or point_idx == 1:
+                model, train_x_current, train_y_current = update_model_with_new_data(
+                    prev_model=model,
+                    likelihood=likelihood,
+                    new_x=new_x,
+                    new_y=new_y,
+                    train_x=train_x_current,
+                    train_y=train_y_current,
+                    device=device,
+                    lr=lr_update,
+                    training_iter=20,  # Quick updates
+                    patience=10,
+                    min_delta=min_delta,
+                    plot_loss=False
+                )
+            else:
+                # Just add data without retraining
+                train_x_current = torch.cat([train_x_current, new_x])
+                train_y_current = torch.cat([train_y_current, new_y])
 
-    # PREDICT AT TEST POINTS
-    with torch.no_grad():
-        pred = likelihood(model(eval_points))
+            # Generate predictions
+            model.eval()
+            likelihood.eval()
+            grid_eval_x, grid_eval_y, eval_points = generate_eval_grid(train_x_current, test_x, num_points=30)
+            eval_points = eval_points.to(device)
 
-        mean = pred.mean.detach().cpu().numpy().reshape(grid_eval_x.shape)
-        variance = pred.variance.detach().cpu().numpy().reshape(grid_eval_x.shape)
-        stddev = np.sqrt(variance)
-        lower, upper = pred.confidence_region()
-        lower = lower.detach().cpu().numpy().reshape(grid_eval_x.shape)
-        upper = upper.detach().cpu().numpy().reshape(grid_eval_x.shape)
+            with torch.no_grad():
+                pred = model(eval_points)
+                mean = pred.mean.detach().cpu().numpy().reshape(grid_eval_x.shape)
+                variance = pred.variance.detach().cpu().numpy().reshape(grid_eval_x.shape)
+                stddev = np.sqrt(variance)
+                lower, upper = pred.confidence_region()
+                lower = lower.detach().cpu().numpy().reshape(grid_eval_x.shape)
+                upper = upper.detach().cpu().numpy().reshape(grid_eval_x.shape)
 
-    # Denormalize all predictions and data
-    grid_eval_x, grid_eval_y, mean, lower, upper, variance, stddev, train_x, train_y, test_x, test_y = denormalize_predictions(
-        grid_eval_x, grid_eval_y, mean, lower, upper, variance, stddev,
-        train_x, train_y, test_x, test_y, normalization_params
-    )
+            # Denormalize
+            grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm, lower_denorm, upper_denorm, variance_denorm, stddev_denorm, train_x_plot, train_y_plot, test_x_plot, test_y_plot = denormalize_predictions(
+                grid_eval_x, grid_eval_y, mean, lower, upper, variance, stddev,
+                train_x_current, train_y_current, test_x, test_y, normalization_params
+            )
 
-    # PLOT SURFACE (all data is now denormalized, so pass None for normalization_params)
-    plot_surface(
-        grid_eval_x, grid_eval_y, mean,
-        train_x=train_x, train_y=train_y,
-        test_x=test_x, test_y=test_y,
-        stddev=stddev, plot_cis=plot_cis, lower=lower, upper=upper,
-        z_scale_factor=z_scale_factor,
-        clim=clim
-    )
+            # Update plot using plot_surface (reuses existing plotter)
+            plotter = plot_surface(
+                grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm,
+                train_x=train_x_plot, train_y=train_y_plot,
+                test_x=None, test_y=None,
+                stddev=stddev_denorm, plot_cis=plot_cis, lower=lower_denorm, upper=upper_denorm,
+                z_scale_factor=z_scale_factor,
+                clim=clim,
+                block=False,
+                title_suffix=f"{point_idx} training points",
+                plotter=plotter  # Reuse existing plotter
+            )
+
+            # Pause
+            time.sleep(realtime_pause_seconds)
+
+        # print(f"\n\nReal-time updates complete. Press Enter to close...")
+        # input()
+
+    elif enable_incremental:
+        # INCREMENTAL TRAINING: Start with 10%, add 10% at a time up to 80%
+        n_total = len(train_x_full)
+        chunk_size = n_total // num_chunks
+
+        print(f"\n{'='*60}")
+        print(f"INCREMENTAL TRAINING")
+        print(f"Total training samples: {n_total}")
+        print(f"Chunk size (10%): {chunk_size}")
+        print(f"Number of chunks: {num_chunks}")
+        print(f"{'='*60}\n")
+
+        # List to store plotter references (prevents garbage collection)
+        plotters = []
+
+        # Initialize model with first chunk (10% of data)
+        train_x_current = train_x_full[:chunk_size].to(device)
+        train_y_current = train_y_full[:chunk_size].to(device)
+
+        likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
+        model = ExactGPModel(train_x_current, train_y_current, likelihood).to(device)
+
+        print(f"\n{'='*60}")
+        print(f"INITIAL TRAINING: {chunk_size} samples (10%)")
+        print(f"{'='*60}")
+
+        train(model, likelihood, train_x_current, train_y_current,
+              lr=lr_initial, training_iter=training_iter_initial,
+              patience=patience_initial, min_delta=min_delta, plot_loss=plot_training_diagnostics)
+
+        print_scaled_hyperparameters(model, likelihood, normalization_params)
+
+        if len(test_x) > 0:
+            rmse, coverage = evaluate_model(model, likelihood, test_x, test_y, normalization_params, plot_results=plot_training_diagnostics)
+            #print(f"RMSE: {rmse:.4f}")
+
+        # Generate and plot first surface
+        model.eval()
+        likelihood.eval()
+        grid_eval_x, grid_eval_y, eval_points = generate_eval_grid(train_x_current, test_x, num_points=50)
+        eval_points = eval_points.to(device)
+
+        with torch.no_grad():
+            pred = model(eval_points)
+            mean = pred.mean.detach().cpu().numpy().reshape(grid_eval_x.shape)
+            variance = pred.variance.detach().cpu().numpy().reshape(grid_eval_x.shape)
+            stddev = np.sqrt(variance)
+            lower, upper = pred.confidence_region()
+            lower = lower.detach().cpu().numpy().reshape(grid_eval_x.shape)
+            upper = upper.detach().cpu().numpy().reshape(grid_eval_x.shape)
+
+        grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm, lower_denorm, upper_denorm, variance_denorm, stddev_denorm, train_x_plot, train_y_plot, test_x_plot, test_y_plot = denormalize_predictions(
+            grid_eval_x, grid_eval_y, mean, lower, upper, variance, stddev,
+            train_x_current, train_y_current, test_x, test_y, normalization_params
+        )
+
+        plotter = plot_surface(
+            grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm,
+            train_x=train_x_plot, train_y=train_y_plot,
+            test_x=test_x_plot, test_y=test_y_plot,
+            stddev=stddev_denorm, plot_cis=plot_cis, lower=lower_denorm, upper=upper_denorm,
+            z_scale_factor=z_scale_factor,
+            clim=clim,
+            block=False,
+            title_suffix=f"10% data (n={chunk_size})"
+        )
+        if plotter is not None:
+            plotters.append(plotter)
+        time.sleep(0.1)  # Give window time to initialize
+
+        # Incrementally add remaining chunks
+        for i in range(1, num_chunks):
+            pct = (i + 1) * 10
+            start_idx = i * chunk_size
+            end_idx = (i + 1) * chunk_size
+
+            print(f"\n{'='*60}")
+            print(f"UPDATE {i}: Adding samples {start_idx} to {end_idx} ({pct}% total)")
+            print(f"{'='*60}")
+
+            # Get next chunk
+            new_x = train_x_full[start_idx:end_idx].to(device)
+            new_y = train_y_full[start_idx:end_idx].to(device)
+
+            # Update model
+            model, train_x_current, train_y_current = update_model_with_new_data(
+                prev_model=model,
+                likelihood=likelihood,
+                new_x=new_x,
+                new_y=new_y,
+                train_x=train_x_current,
+                train_y=train_y_current,
+                device=device,
+                lr=lr_update,
+                training_iter=training_iter_update,
+                patience=patience_update,
+                min_delta=min_delta,
+                plot_loss=plot_training_diagnostics
+            )
+
+            print_scaled_hyperparameters(model, likelihood, normalization_params)
+
+            if len(test_x) > 0:
+                rmse, coverage = evaluate_model(model, likelihood, test_x, test_y, normalization_params, plot_results=plot_training_diagnostics)
+                #print(f"RMSE: {rmse:.4f}")
+
+            # Generate and plot updated surface
+            model.eval()
+            likelihood.eval()
+            grid_eval_x, grid_eval_y, eval_points = generate_eval_grid(train_x_current, test_x, num_points=50)
+            eval_points = eval_points.to(device)
+
+            with torch.no_grad():
+                pred = model(eval_points)
+                mean = pred.mean.detach().cpu().numpy().reshape(grid_eval_x.shape)
+                variance = pred.variance.detach().cpu().numpy().reshape(grid_eval_x.shape)
+                stddev = np.sqrt(variance)
+                lower, upper = pred.confidence_region()
+                lower = lower.detach().cpu().numpy().reshape(grid_eval_x.shape)
+                upper = upper.detach().cpu().numpy().reshape(grid_eval_x.shape)
+
+            grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm, lower_denorm, upper_denorm, variance_denorm, stddev_denorm, train_x_plot, train_y_plot, test_x_plot, test_y_plot = denormalize_predictions(
+                grid_eval_x, grid_eval_y, mean, lower, upper, variance, stddev,
+                train_x_current, train_y_current, test_x, test_y, normalization_params
+            )
+
+            plotter = plot_surface(
+                grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm,
+                train_x=train_x_plot, train_y=train_y_plot,
+                test_x=test_x_plot, test_y=test_y_plot,
+                stddev=stddev_denorm, plot_cis=plot_cis, lower=lower_denorm, upper=upper_denorm,
+                z_scale_factor=z_scale_factor,
+                clim=clim,
+                block=False,
+                title_suffix=f"{pct}% data (n={end_idx})"
+            )
+            if plotter is not None:
+                plotters.append(plotter)
+            time.sleep(0.1)  # Give window time to initialize
+
+    else:
+        # ORIGINAL MODE: Train on all data at once
+        train_x_current = train_x_full.to(device)
+        train_y_current = train_y_full.to(device)
+
+        likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
+        model = ExactGPModel(train_x_current, train_y_current, likelihood).to(device)
+
+        print(f"\n{'='*60}")
+        print(f"STANDARD TRAINING")
+        print(f"Training samples: {len(train_x_current)}")
+        print(f"{'='*60}")
+
+        train(model, likelihood, train_x_current, train_y_current,
+              lr=lr_initial, training_iter=training_iter_initial,
+              patience=patience_initial, min_delta=min_delta, plot_loss=plot_training_diagnostics)
+
+        print_scaled_hyperparameters(model, likelihood, normalization_params)
+
+        if len(test_x) > 0:
+            rmse, coverage = evaluate_model(model, likelihood, test_x, test_y, normalization_params, plot_results=plot_training_diagnostics)
+
+        # Generate and plot surface
+        model.eval()
+        likelihood.eval()
+        grid_eval_x, grid_eval_y, eval_points = generate_eval_grid(train_x_current, test_x, num_points=50)
+        eval_points = eval_points.to(device)
+
+        with torch.no_grad():
+            pred = model(eval_points)
+            mean = pred.mean.detach().cpu().numpy().reshape(grid_eval_x.shape)
+            variance = pred.variance.detach().cpu().numpy().reshape(grid_eval_x.shape)
+            stddev = np.sqrt(variance)
+            lower, upper = pred.confidence_region()
+            lower = lower.detach().cpu().numpy().reshape(grid_eval_x.shape)
+            upper = upper.detach().cpu().numpy().reshape(grid_eval_x.shape)
+
+        grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm, lower_denorm, upper_denorm, variance_denorm, stddev_denorm, train_x_plot, train_y_plot, test_x_plot, test_y_plot = denormalize_predictions(
+            grid_eval_x, grid_eval_y, mean, lower, upper, variance, stddev,
+            train_x_current, train_y_current, test_x, test_y, normalization_params
+        )
+
+        plot_surface(
+            grid_eval_x_denorm, grid_eval_y_denorm, mean_denorm,
+            train_x=train_x_plot, train_y=train_y_plot,
+            test_x=test_x_plot, test_y=test_y_plot,
+            stddev=stddev_denorm, plot_cis=plot_cis, lower=lower_denorm, upper=upper_denorm,
+            z_scale_factor=z_scale_factor,
+            clim=clim,
+            block=True
+        )
 
     input("Press Enter to close...")  # keeps the program alive
     
