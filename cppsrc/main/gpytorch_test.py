@@ -21,19 +21,171 @@ import vtk
 
 # We will use the simplest form of GP model, exact inference
 class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood):
+    def __init__(self, train_x, train_y, likelihood, use_priors=False,
+                 lengthscale_prior=None, outputscale_prior=None,
+                 noise_prior=None, mean_prior=None, init_at_priors=False):
+        """
+        Initialize GP model with optional informative priors.
+
+        Parameters
+        ----------
+        train_x, train_y : torch.Tensor
+            Training data
+        likelihood : gpytorch.likelihoods.GaussianLikelihood
+            Likelihood function
+        use_priors : bool
+            If True, apply the specified priors
+        lengthscale_prior : tuple of (mean, std) or None
+            LogNormal prior for lengthscale (mean, std of underlying normal distribution).
+            If None, uses GPyTorch default.
+        outputscale_prior : tuple of (mean, std) or None
+            LogNormal prior for outputscale (mean, std of underlying normal distribution).
+            If None, uses GPyTorch default.
+        noise_prior : tuple of (mean, std) or None
+            LogNormal prior for noise (mean, std of underlying normal distribution).
+            If None, uses GPyTorch default.
+        mean_prior : tuple of (mean, std) or None
+            Normal prior for constant mean. If None, uses GPyTorch default
+        init_at_priors : bool
+            If True, initialize hyperparameters to prior medians/means.
+        """
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = gpytorch.means.ConstantMean()
         #self.mean_module = gpytorch.means.LinearMean(input_size=2)
         self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+
+        # Set informative priors for adaptive sampling with few points
+        if use_priors:
+            # Prior on lengthscale: spatial correlation scale (in normalized space)
+            # LogNormal prior ensures positive values for scale parameter
+            if lengthscale_prior is not None:
+                self.covar_module.base_kernel.lengthscale_prior = gpytorch.priors.LogNormalPrior(
+                    lengthscale_prior[0], lengthscale_prior[1])
+
+            # Prior on outputscale: signal variance (in normalized space)
+            # LogNormal prior ensures positive values for scale parameter
+            if outputscale_prior is not None:
+                self.covar_module.outputscale_prior = gpytorch.priors.LogNormalPrior(
+                    outputscale_prior[0], outputscale_prior[1])
+
+            # Prior on noise: measurement noise (in normalized space)
+            # LogNormal prior ensures positive values for scale parameter
+            if noise_prior is not None:
+                likelihood.noise_prior = gpytorch.priors.LogNormalPrior(
+                    noise_prior[0], noise_prior[1])
+
+            # Prior on mean: expected mean value (in normalized space)
+            # Normal prior allows both positive and negative values
+            if mean_prior is not None:
+                self.mean_module.constant_prior = gpytorch.priors.NormalPrior(
+                    mean_prior[0], mean_prior[1])
+        
+        if init_at_priors:
+            if lengthscale_prior is not None:
+                # Initialize lengthscale to prior median
+                self.covar_module.base_kernel.lengthscale = np.exp(lengthscale_prior[0])
+            if outputscale_prior is not None:
+                # Initialize outputscale to prior median
+                self.covar_module.outputscale = np.exp(outputscale_prior[0])
+            if noise_prior is not None:
+                # Initialize noise to prior median
+                likelihood.noise = np.exp(noise_prior[0])
+            if mean_prior is not None:
+                # Initialize mean to prior mean
+                self.mean_module.constant = mean_prior[0]
 
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
+
 ### UTILITY FUNCTIONS ###
-def normalize_data(data_x, data_y):
+# Data loading and preprocessing
+def downsample_by_grid(gdf, grid_size):
+    """
+    Downsample a GeoDataFrame by selecting one point per grid cell.
+
+    Parameters
+    ----------
+    gdf : GeoDataFrame
+        Input GeoDataFrame with 'east' and 'north' columns in meters.
+    grid_size : float
+        The size of the grid cells in meters.
+
+    Returns
+    -------
+    GeoDataFrame
+        Downsampled GeoDataFrame.
+    """
+    # Create grid cell IDs
+    gdf['grid_x'] = (gdf['east'] // grid_size).astype(int)
+    gdf['grid_y'] = (gdf['north'] // grid_size).astype(int)
+
+    # For each grid cell, select one random sample
+    gdf_sampled = gdf.groupby(['grid_x', 'grid_y']).sample(1, random_state=42)
+
+    return gdf_sampled.drop(columns=['grid_x', 'grid_y'])
+
+
+def load_data(data_path, num_samples=-1, percent_train=0.8, normalize=False, moisture_trim_range=None, normalization_bounds=None, downsample_grid_size=None):
+    gdf = gpd.read_file(data_path)
+    # print(gdf.head())
+    # print(gdf.columns)
+
+    # Extract x (longitude) and y (latitude)
+    gdf["lon"] = gdf.geometry.x
+    gdf["lat"] = gdf.geometry.y
+
+    # Keep only points with valid moisture readings
+    gdf = gdf.dropna(subset=["Moisture"])
+
+    # Trim moisture values outside of the specified range if requested
+    if moisture_trim_range is not None:
+        min_moisture, max_moisture = moisture_trim_range
+        gdf = gdf[(gdf["Moisture"] >= min_moisture) & (gdf["Moisture"] <= max_moisture)]
+
+    # Always convert to ENU (meters) for the full dataset
+    lat_ref = gdf["lat"].min()
+    lon_ref = gdf["lon"].min()
+    alt_ref = 0.0
+    east, north, up = pm.geodetic2enu(
+        gdf["lat"].values,
+        gdf["lon"].values,
+        np.zeros_like(gdf["lat"].values),
+        lat_ref, lon_ref, alt_ref
+    )
+    gdf["east"] = east
+    gdf["north"] = north
+
+    # Now, perform sampling
+    gdf_sample = gdf
+    if downsample_grid_size is not None:
+        print(f"Downsampling data to one point per {downsample_grid_size}m grid...")
+        gdf_sample = downsample_by_grid(gdf, downsample_grid_size)
+        print(f"Original points: {len(gdf)}, Downsampled points: {len(gdf_sample)}")
+    elif num_samples != -1:
+        gdf_sample = gdf.sample(num_samples, random_state=42)
+
+    # Extract data in ENU coordinates
+    data_x = torch.tensor(np.column_stack([gdf_sample["east"], gdf_sample["north"]]), dtype=torch.float32)
+    data_y = torch.tensor(gdf_sample["Moisture"].values, dtype=torch.float32)
+
+    # Normalize if requested
+    normalization_params = None
+    if normalize:
+        data_x, data_y, normalization_params = normalize_data(data_x, data_y, normalization_bounds=normalization_bounds)
+
+    # Split into training and testing sets
+    n = len(data_x)
+    n_train = int(percent_train * n)
+    train_x, test_x = data_x[:n_train], data_x[n_train:]
+    train_y, test_y = data_y[:n_train], data_y[n_train:]
+
+    return train_x, train_y, test_x, test_y, normalization_params
+
+# Normalization
+def normalize_data(data_x, data_y, normalization_bounds=None):
     """
     Normalize input features (x) and output (y) to [0, 1] range.
     Uses uniform scaling for x inputs to preserve relative spatial scale.
@@ -44,6 +196,9 @@ def normalize_data(data_x, data_y):
         Input features (N, 2) - either (lon, lat) or (east, north)
     data_y : torch.Tensor
         Output values (N,) - moisture
+    normalization_bounds : dict, optional
+        If provided, use these bounds for normalization instead of calculating them from data.
+        Expected keys: 'x_min', 'x_max', 'y_min', 'y_max'.
 
     Returns
     -------
@@ -54,22 +209,34 @@ def normalize_data(data_x, data_y):
     normalization_params : dict
         Dictionary containing normalization parameters
     """
-    # Get min/max for each x dimension
-    x_min = data_x.min(dim=0)[0]
-    x_max = data_x.max(dim=0)[0]
+    if normalization_bounds is not None:
+        x_min = normalization_bounds['x_min']
+        x_max = normalization_bounds['x_max']
+        y_min = normalization_bounds['y_min']
+        y_max = normalization_bounds['y_max']
 
-    # Use the maximum range across both dimensions for uniform scaling
-    # This preserves the aspect ratio of the spatial coordinates
-    x_range = x_max - x_min
-    x_scale = x_range.max()
+        x_range = x_max - x_min
+        x_scale = x_range.max()
+        y_scale = y_max - y_min
+    else:
+        # Get min/max for each x dimension
+        x_min = data_x.min(dim=0)[0]
+        x_max = data_x.max(dim=0)[0]
+
+        # Use the maximum range across both dimensions for uniform scaling
+        # This preserves the aspect ratio of the spatial coordinates
+        x_range = x_max - x_min
+        x_scale = x_range.max()
+
+        # Normalize y (output) using range
+        y_min = data_y.min()
+        y_max = data_y.max()
+        y_scale = y_max - y_min
 
     # Normalize x (inputs) using uniform scale
     data_x_norm = (data_x - x_min) / x_scale
 
     # Normalize y (output) using range
-    y_min = data_y.min()
-    y_max = data_y.max()
-    y_scale = y_max - y_min
     data_y_norm = (data_y - y_min) / y_scale
 
     # Clamp minimums to be at least 0
@@ -86,6 +253,103 @@ def normalize_data(data_x, data_y):
 
     return data_x_norm, data_y_norm, normalization_params
 
+def normalize_priors(lengthscale_meters, outputscale_moisture, noise_moisture, mean_moisture,
+                                          normalization_params, lengthscale_uncertainty=0.5,
+                                          outputscale_uncertainty=0.5, noise_uncertainty=0.5, mean_std_moisture=None):
+    """
+    Convert physically meaningful prior specifications to normalized LogNormal/Normal prior parameters.
+
+    Parameters
+    ----------
+    lengthscale_meters : float or tuple
+        Spatial lengthscale in meters. Can be a single value (median) or (median, std_factor).
+    outputscale_moisture : float or tuple
+        Output scale (signal variance) in moisture percentage squared units (%²).
+    noise_moisture : float or tuple
+        Noise variance in moisture percentage squared units (%²).
+    mean_moisture : float
+        Expected mean moisture value in percentage.
+    normalization_params : dict
+        Dictionary containing normalization parameters (x_scale, y_scale, y_min).
+    lengthscale_uncertainty : float
+        Uncertainty factor for lengthscale (std of log-normal distribution). Default 0.5.
+    outputscale_uncertainty : float
+        Uncertainty factor for outputscale. Default 0.5.
+    noise_uncertainty : float
+        Uncertainty factor for noise. Default 0.5.
+    mean_std_moisture : float or None
+        Standard deviation for mean prior in moisture percentage units. If None, uses outputscale_moisture/2.
+
+    Returns
+    -------
+    lengthscale_prior : tuple
+        (mean, std) for LogNormal prior in normalized space
+    outputscale_prior : tuple
+        (mean, std) for LogNormal prior in normalized space
+    noise_prior : tuple
+        (mean, std) for LogNormal prior in normalized space
+    mean_prior : tuple
+        (mean, std) for Normal prior in normalized space
+
+    Notes
+    -----
+    For LogNormal distribution with parameters (mu, sigma):
+    - median = exp(mu)
+    - mean = exp(mu + sigma^2/2)
+    - To set median to m: mu = log(m)
+    """
+    # Extract normalization parameters
+    x_scale = normalization_params['x_scale']
+    if torch.is_tensor(x_scale):
+        x_scale = x_scale.item()
+
+    y_scale = normalization_params['y_scale']
+    if torch.is_tensor(y_scale):
+        y_scale = y_scale.item()
+
+    y_min = normalization_params['y_min']
+    if torch.is_tensor(y_min):
+        y_min = y_min.item()
+
+    # Convert lengthscale from meters to normalized space
+    lengthscale_norm = lengthscale_meters / x_scale
+    # LogNormal: mu = log(median), sigma = uncertainty factor
+    lengthscale_prior = (np.log(lengthscale_norm), lengthscale_uncertainty)
+
+    # Convert outputscale from moisture units to normalized space
+    # Outputscale is variance, so scale by y_scale (not y_scale^2, since we're in normalized [0,1] space)
+    outputscale_norm = outputscale_moisture / y_scale
+    outputscale_prior = (np.log(outputscale_norm), outputscale_uncertainty)
+
+    # Convert noise from moisture units to normalized space
+    noise_norm = noise_moisture / y_scale
+    noise_prior = (np.log(noise_norm), noise_uncertainty)
+
+    # Convert mean from moisture units to normalized space
+    # Normal distribution: (mean, std) both in normalized space
+    mean_norm = (mean_moisture - y_min) / y_scale
+    if mean_std_moisture is None:
+        mean_std_moisture = outputscale_moisture / 2.0  # Default: half of output scale
+    mean_std_norm = mean_std_moisture / y_scale
+    mean_prior = (mean_norm, mean_std_norm)
+
+    print("\n=== Physical Priors Converted to Normalized Space ===")
+    print(f"Lengthscale: {lengthscale_meters:.1f}m -> {lengthscale_norm:.4f} (normalized)")
+    print(f"  LogNormal prior: mu={lengthscale_prior[0]:.3f}, sigma={lengthscale_prior[1]:.3f}")
+    print(f"  Median in normalized space: {np.exp(lengthscale_prior[0]):.4f}")
+    print(f"Outputscale: {outputscale_moisture:.2f}%² -> {outputscale_norm:.4f} (normalized)")
+    print(f"  LogNormal prior: mu={outputscale_prior[0]:.3f}, sigma={outputscale_prior[1]:.3f}")
+    print(f"  Median in normalized space: {np.exp(outputscale_prior[0]):.4f}")
+    print(f"Noise: {noise_moisture:.3f}%² -> {noise_norm:.5f} (normalized)")
+    print(f"  LogNormal prior: mu={noise_prior[0]:.3f}, sigma={noise_prior[1]:.3f}")
+    print(f"  Median in normalized space: {np.exp(noise_prior[0]):.5f}")
+    print(f"Mean: {mean_moisture:.1f}% -> {mean_norm:.4f} (normalized)")
+    print(f"  Normal prior: mean={mean_prior[0]:.4f}, std={mean_prior[1]:.4f}")
+    print("="*60)
+
+    return lengthscale_prior, outputscale_prior, noise_prior, mean_prior
+
+# Denormalization
 def denormalize(data_norm, data_min, data_scale):
     """
     Denormalize data from [0, 1] back to original scale.
@@ -193,63 +457,298 @@ def denormalize_predictions(grid_eval_x, grid_eval_y, mean, lower, upper, varian
 
     return grid_eval_x, grid_eval_y, mean, lower, upper, variance, stddev, train_x, train_y, test_x, test_y
 
-def load_data(data_path, num_samples=-1, percent_train=0.8, normalize=False):
-    gdf = gpd.read_file(data_path)
-    # print(gdf.head())
-    # print(gdf.columns)
+def denormalize_hyperparameters(model, likelihood, normalization_params):
+    """
+    Denormalize model hyperparameters to physical units.
 
-    # Extract x (longitude) and y (latitude)
-    gdf["lon"] = gdf.geometry.x
-    gdf["lat"] = gdf.geometry.y
+    Parameters
+    ----------
+    model : ExactGPModel
+        The GP model
+    likelihood : GaussianLikelihood
+        The likelihood
+    normalization_params : dict
+        Normalization parameters
 
-    # Keep only points with valid moisture readings
-    gdf = gdf.dropna(subset=["Moisture"])
+    Returns
+    -------
+    dict : Dictionary with denormalized hyperparameters
+    """
+    # Get normalized values
+    lengthscale_norm = model.covar_module.base_kernel.lengthscale.item()
+    outputscale_norm = model.covar_module.outputscale.item()
+    noise_norm = likelihood.noise.item()
 
-    # Downsample for quick training if a limit is set
-    if num_samples == -1:
-        gdf_sample = gdf
+    if isinstance(model.mean_module, gpytorch.means.ConstantMean):
+        mean_norm = model.mean_module.constant.item()
     else:
-        gdf_sample = gdf.sample(num_samples, random_state=42)
+        mean_norm = None
 
-    # Always convert to ENU (meters)
-    # Use southwest corner as reference
-    lat_ref = gdf_sample["lat"].min()
-    lon_ref = gdf_sample["lon"].min()
-    alt_ref = 0.0
+    # Extract normalization parameters
+    x_scale = normalization_params['x_scale'].item() if torch.is_tensor(normalization_params['x_scale']) else normalization_params['x_scale']
+    y_min = normalization_params['y_min'].item() if torch.is_tensor(normalization_params['y_min']) else normalization_params['y_min']
+    y_scale = normalization_params['y_scale'].item() if torch.is_tensor(normalization_params['y_scale']) else normalization_params['y_scale']
 
-    # Convert geodetic -> ENU (East, North, Up) in meters
-    east, north, up = pm.geodetic2enu(
-        gdf_sample["lat"].values,
-        gdf_sample["lon"].values,
-        np.zeros_like(gdf_sample["lat"].values),
-        lat_ref, lon_ref, alt_ref
-    )
+    # Denormalize
+    lengthscale_phys = lengthscale_norm * x_scale
+    outputscale_phys = outputscale_norm * y_scale
+    noise_phys = noise_norm * y_scale
+    mean_phys = mean_norm * y_scale + y_min if mean_norm is not None else None
 
-    # Store ENU coordinates
-    gdf_sample["east"] = east
-    gdf_sample["north"] = north
+    return {
+        'lengthscale': lengthscale_phys,
+        'outputscale': outputscale_phys,
+        'noise': noise_phys,
+        'mean': mean_phys
+    }
 
-    # Extract data in ENU coordinates
-    data_x = torch.tensor(np.column_stack([east, north]), dtype=torch.float32)
+def denormalize_priors(model, likelihood, normalization_params):
+    """
+    Denormalize model priors to physical units.
 
-    data_y = torch.tensor(gdf_sample["Moisture"].values, dtype=torch.float32)
+    Parameters
+    ----------
+    model : ExactGPModel
+        The GP model
+    likelihood : GaussianLikelihood
+        The likelihood
+    normalization_params : dict
+        Normalization parameters
 
-    # Normalize if requested
-    normalization_params = None
-    if normalize:
-        data_x, data_y, normalization_params = normalize_data(data_x, data_y)
+    Returns
+    -------
+    dict : Dictionary with denormalized prior parameters
+    """
+    result = {}
 
-    # Split into training and testing sets
-    n = len(data_x)
-    n_train = int(percent_train * n)
-    train_x, test_x = data_x[:n_train], data_x[n_train:]
-    train_y, test_y = data_y[:n_train], data_y[n_train:]
+    # Extract normalization parameters
+    x_scale = normalization_params['x_scale'].item() if torch.is_tensor(normalization_params['x_scale']) else normalization_params['x_scale']
+    y_min = normalization_params['y_min'].item() if torch.is_tensor(normalization_params['y_min']) else normalization_params['y_min']
+    y_scale = normalization_params['y_scale'].item() if torch.is_tensor(normalization_params['y_scale']) else normalization_params['y_scale']
 
-    return train_x, train_y, test_x, test_y, normalization_params
+    # Lengthscale prior
+    if hasattr(model.covar_module.base_kernel, 'lengthscale_prior') and model.covar_module.base_kernel.lengthscale_prior is not None:
+        ls_prior = model.covar_module.base_kernel.lengthscale_prior
+        ls_loc_norm = ls_prior.loc.item()
+        ls_scale_norm = ls_prior.scale.item()
+        ls_median_norm = np.exp(ls_loc_norm)
+        ls_median_phys = ls_median_norm * x_scale
+        result['lengthscale'] = {
+            'median': ls_median_phys,
+            'scale': ls_scale_norm,
+            'median_norm': ls_median_norm
+        }
+
+    # Outputscale prior
+    if hasattr(model.covar_module, 'outputscale_prior') and model.covar_module.outputscale_prior is not None:
+        os_prior = model.covar_module.outputscale_prior
+        os_loc_norm = os_prior.loc.item()
+        os_scale_norm = os_prior.scale.item()
+        os_median_norm = np.exp(os_loc_norm)
+        os_median_phys = os_median_norm * y_scale
+        result['outputscale'] = {
+            'median': os_median_phys,
+            'scale': os_scale_norm,
+            'median_norm': os_median_norm
+        }
+
+    # Noise prior
+    if hasattr(likelihood, 'noise_prior') and likelihood.noise_prior is not None:
+        n_prior = likelihood.noise_prior
+        n_loc_norm = n_prior.loc.item()
+        n_scale_norm = n_prior.scale.item()
+        n_median_norm = np.exp(n_loc_norm)
+        n_median_phys = n_median_norm * y_scale
+        result['noise'] = {
+            'median': n_median_phys,
+            'scale': n_scale_norm,
+            'median_norm': n_median_norm
+        }
+
+    # Mean prior
+    if hasattr(model.mean_module, 'constant_prior') and model.mean_module.constant_prior is not None:
+        mean_prior = model.mean_module.constant_prior
+        mean_loc_norm = mean_prior.loc.item()
+        mean_scale_norm = mean_prior.scale.item()
+        mean_loc_phys = mean_loc_norm * y_scale + y_min
+        mean_scale_phys = mean_scale_norm * y_scale
+        result['mean'] = {
+            'loc': mean_loc_phys,
+            'scale': mean_scale_phys,
+            'loc_norm': mean_loc_norm,
+            'scale_norm': mean_scale_norm
+        }
+
+    return result
+
+# Printing
+def print_scaled_hyperparameters(model, likelihood, normalization_params=None, training_mode=False, training_iter=0, training_iter_max=0, training_loss=0.0):
+    """
+    Print hyperparameters scaled back to original data units for interpretability.
+
+    Parameters
+    ----------
+    model : ExactGPModel
+        Trained GP model
+    likelihood : GaussianLikelihood
+        Trained likelihood
+    normalization_params : dict or None
+        If provided, scale hyperparameters back to original units
+    """
+    if not training_mode:
+        print("\n=== Learned Hyperparameters ===")
+
+    if normalization_params is not None:
+        # Use denormalize_hyperparameters helper to get physical units
+        hyper_phys = denormalize_hyperparameters(model, likelihood, normalization_params)
+
+        if training_mode:
+            print(f"Iter {training_iter + 1}/{training_iter_max} - Loss: {training_loss:.3f} "
+                f"  lengthscale: {hyper_phys['lengthscale']:.2f}m "
+                f"  outputscale: {hyper_phys['outputscale']:.3f}%² "
+                f"  noise: {hyper_phys['noise']:.3f}%² "
+                f"  mean: {hyper_phys['mean']:.2f}%")
+        else:
+            print(f"Lengthscale: {hyper_phys['lengthscale']:.2f}m")
+            print(f"Outputscale: {hyper_phys['outputscale']:.3f}%²")
+            print(f"Noise: {hyper_phys['noise']:.3f}%²")
+            print(f"Mean: {hyper_phys['mean']:.2f}%")
+
+    else:
+        # No normalization - print normalized values
+        lengthscale = model.covar_module.base_kernel.lengthscale.item()
+        outputscale = model.covar_module.outputscale.item()
+        noise = likelihood.noise.item()
+
+        if training_mode:
+            if isinstance(model.mean_module, gpytorch.means.ConstantMean):
+                mean_param = model.mean_module.constant.item()
+            elif isinstance(model.mean_module, gpytorch.means.LinearMean):
+                weights = model.mean_module.weights.detach().cpu().numpy()
+                bias = model.mean_module.bias.item()
+                mean_param = f"bias={bias:.3f}, w={weights}"
+            else:
+                mean_param = "N/A"
+
+            print(f"Iter {training_iter + 1}/{training_iter_max} - Loss: {training_loss:.3f} "
+                f"  lengthscale: {lengthscale:.3f} "
+                f"  outputscale: {outputscale:.3f} "
+                f"  noise: {noise:.3f} "
+                f"  mean: {mean_param}")
+        else:
+            if isinstance(model.mean_module, gpytorch.means.ConstantMean):
+                mean_param = model.mean_module.constant.item()
+                print(f"Lengthscale: {lengthscale:.3f}")
+                print(f"Outputscale: {outputscale:.3f}")
+                print(f"Noise: {noise:.6f}")
+                print(f"Mean: {mean_param:.3f}")
+            elif isinstance(model.mean_module, gpytorch.means.LinearMean):
+                weights = model.mean_module.weights.detach().cpu().numpy()
+                bias = model.mean_module.bias.item()
+                print(f"Lengthscale: {lengthscale:.3f}")
+                print(f"Outputscale: {outputscale:.3f}")
+                print(f"Noise: {noise:.6f}")
+                print(f"Mean: bias={bias:.3f}, w={weights}")
+            else:
+                print(f"Lengthscale: {lengthscale:.3f}")
+                print(f"Outputscale: {outputscale:.3f}")
+                print(f"Noise: {noise:.6f}")
+                print(f"Mean: N/A")
+
+def print_prior_configuration(model, likelihood, normalization_params=None):
+    """
+    Print the prior configuration of the model.
+
+    Parameters
+    ----------
+    model : ExactGPModel
+        The GP model
+    likelihood : GaussianLikelihood
+        The likelihood
+    normalization_params : dict or None
+        If provided, scale priors back to original units for display
+    """
+    print(f"\n=== Prior Configuration ===")
+
+    if normalization_params is not None:
+        # Use denormalize_priors helper to get physical units
+        priors_phys = denormalize_priors(model, likelihood, normalization_params)
+
+        # Mean prior
+        if 'mean' in priors_phys:
+            mean_info = priors_phys['mean']
+            print(f"Mean prior: Normal(loc={mean_info['loc']:.2f}%, scale={mean_info['scale']:.2f}%) "
+                  f"[normalized: loc={mean_info['loc_norm']:.4f}, scale={mean_info['scale_norm']:.4f}]")
+        else:
+            print(f"Mean prior: None")
+
+        # Lengthscale prior
+        if 'lengthscale' in priors_phys:
+            ls_info = priors_phys['lengthscale']
+            print(f"Lengthscale prior: LogNormal(median={ls_info['median']:.2f}m, scale={ls_info['scale']:.2f}) "
+                  f"[normalized median: {ls_info['median_norm']:.4f}]")
+        else:
+            print(f"Lengthscale prior: None")
+
+        # Outputscale prior
+        if 'outputscale' in priors_phys:
+            os_info = priors_phys['outputscale']
+            print(f"Outputscale prior: LogNormal(median={os_info['median']:.3f}%², scale={os_info['scale']:.2f}) "
+                  f"[normalized median: {os_info['median_norm']:.4f}]")
+        else:
+            print(f"Outputscale prior: None")
+
+        # Noise prior
+        if 'noise' in priors_phys:
+            n_info = priors_phys['noise']
+            print(f"Noise prior: LogNormal(median={n_info['median']:.3f}%, scale={n_info['scale']:.2f}) "
+                  f"[normalized median: {n_info['median_norm']:.5f}]")
+        else:
+            print(f"Noise prior: None")
+    else:
+        # No normalization - print raw normalized values
+        # Check mean prior
+        if hasattr(model.mean_module, 'constant_prior') and model.mean_module.constant_prior is not None:
+            mean_prior = model.mean_module.constant_prior
+            mean_loc = mean_prior.loc.item()
+            mean_scale = mean_prior.scale.item()
+            print(f"Mean prior: Normal(loc={mean_loc:.4f}, scale={mean_scale:.4f})")
+        else:
+            print(f"Mean prior: None")
+
+        # Check lengthscale prior
+        if hasattr(model.covar_module.base_kernel, 'lengthscale_prior') and model.covar_module.base_kernel.lengthscale_prior is not None:
+            ls_prior = model.covar_module.base_kernel.lengthscale_prior
+            ls_loc = ls_prior.loc.item()
+            ls_scale = ls_prior.scale.item()
+            print(f"Lengthscale prior: LogNormal(loc={ls_loc:.4f}, scale={ls_scale:.4f})")
+        else:
+            print(f"Lengthscale prior: None")
+
+        # Check outputscale prior
+        if hasattr(model.covar_module, 'outputscale_prior') and model.covar_module.outputscale_prior is not None:
+            os_prior = model.covar_module.outputscale_prior
+            os_loc = os_prior.loc.item()
+            os_scale = os_prior.scale.item()
+            print(f"Outputscale prior: LogNormal(loc={os_loc:.4f}, scale={os_scale:.4f})")
+        else:
+            print(f"Outputscale prior: None")
+
+        # Check noise prior
+        if hasattr(likelihood, 'noise_prior') and likelihood.noise_prior is not None:
+            n_prior = likelihood.noise_prior
+            n_loc = n_prior.loc.item()
+            n_scale = n_prior.scale.item()
+            print(f"Noise prior: LogNormal(loc={n_loc:.4f}, scale={n_scale:.4f})")
+        else:
+            print(f"Noise prior: None")
+
+    print("="*60)
+
 
 ### TRAINING ###
 def train(model, likelihood, train_x, train_y, lr=0.1, training_iter=50, patience=50, min_delta=1e-4,
-          warm_start=False, prev_model=None, plot_loss=True):
+          warm_start=False, prev_model=None, plot_loss=True, normalization_params=None):
     """
     Train a GP model.
 
@@ -306,25 +805,9 @@ def train(model, likelihood, train_x, train_y, lr=0.1, training_iter=50, patienc
         loss_value = loss.item()
         losses.append(loss_value)
 
-        # Print all hyperparameters
-        lengthscale = model.covar_module.base_kernel.lengthscale.item() #.detach().cpu().numpy()
-        outputscale = model.covar_module.outputscale.item()
-        noise = model.likelihood.noise.item()
+        # Print hyperparameters (in physical units if normalization_params provided)
+        print_scaled_hyperparameters(model, likelihood, normalization_params=normalization_params, training_mode=True, training_iter=i, training_iter_max=training_iter, training_loss=loss.item())
 
-        if isinstance(model.mean_module, gpytorch.means.ConstantMean):
-            mean_param = model.mean_module.constant.item()
-        elif isinstance(model.mean_module, gpytorch.means.LinearMean):
-            weights = model.mean_module.weights.detach().cpu().numpy()
-            bias = model.mean_module.bias.item()
-            mean_param = f"bias={bias:.3f}, w={weights}"
-        else:
-            mean_param = "N/A"
-
-        print(f"Iter {i + 1}/{training_iter} - Loss: {loss.item():.3f} "
-            f"  lengthscale: {lengthscale:.3f} "
-            f"  outputscale: {outputscale:.3f} "
-            f"  noise: {noise:.3f} "
-            f"  mean: {mean_param}")
         optimizer.step()
 
         # Early stopping check
@@ -346,7 +829,9 @@ def train(model, likelihood, train_x, train_y, lr=0.1, training_iter=50, patienc
 
 def update_model_with_new_data(prev_model, likelihood, new_x, new_y,
                                train_x, train_y, device,
-                               lr=0.01, training_iter=50, patience=50, min_delta=1e-4, plot_loss=True):
+                               lr=0.01, training_iter=50, patience=50, min_delta=1e-4, plot_loss=True,
+                               use_priors=False, lengthscale_prior=None, outputscale_prior=None,
+                               noise_prior=None, mean_prior=None, normalization_params=None):
     """
     Add new observations to the model and perform a quick hyperparameter update.
 
@@ -372,6 +857,12 @@ def update_model_with_new_data(prev_model, likelihood, new_x, new_y,
         Minimum improvement for early stopping
     plot_loss : bool
         If True, plot the loss curve after training
+    use_priors : bool
+        If True, apply informative priors to the model
+    lengthscale_prior, outputscale_prior, noise_prior, mean_prior : tuple or None
+        Prior parameters (mean, std) for each hyperparameter
+    normalization_params : dict or None
+        Normalization parameters for denormalizing hyperparameters during training
 
     Returns
     -------
@@ -384,13 +875,19 @@ def update_model_with_new_data(prev_model, likelihood, new_x, new_y,
     train_x = torch.cat([train_x, new_x])
     train_y = torch.cat([train_y, new_y])
 
-    # Create new model with updated data
-    updated_model = ExactGPModel(train_x, train_y, likelihood).to(device)
+    # Create new model with updated data and priors
+    updated_model = ExactGPModel(train_x, train_y, likelihood,
+                                 use_priors=use_priors,
+                                 lengthscale_prior=lengthscale_prior,
+                                 outputscale_prior=outputscale_prior,
+                                 noise_prior=noise_prior,
+                                 mean_prior=mean_prior).to(device)
 
     # Train with warm start from previous model
     train(updated_model, likelihood, train_x, train_y,
           lr=lr, training_iter=training_iter, patience=patience, min_delta=min_delta,
-          warm_start=True, prev_model=prev_model, plot_loss=plot_loss)
+          warm_start=True, prev_model=prev_model, plot_loss=plot_loss,
+          normalization_params=normalization_params)
 
     return updated_model, train_x, train_y
 
@@ -447,6 +944,92 @@ def generate_eval_grid(train_x, test_x, num_points=50):
     test_points = torch.tensor(np.column_stack([grid_x.ravel(), grid_y.ravel()]), dtype=torch.float32)
 
     return grid_x, grid_y, test_points
+
+def evaluate_model(model, likelihood, test_x, test_y, normalization_params=None, plot_results=True):
+    """
+    Evaluate model performance on test data.
+
+    Parameters
+    ----------
+    model : ExactGPModel
+        Trained GP model
+    likelihood : GaussianLikelihood
+        Trained likelihood
+    test_x : torch.Tensor
+        Test input features (N, 2)
+    test_y : torch.Tensor
+        True test output values (N,)
+    normalization_params : dict or None
+        If provided, denormalize predictions for evaluation
+    plot_results : bool
+        If True, plot true vs predicted scatter plot
+
+    Returns
+    -------
+    rmse : float
+        Root mean squared error
+    coverage : float
+        Percentage of true values within 95% confidence interval
+    """
+    model.eval()
+    likelihood.eval()
+
+    with torch.no_grad():
+        pred = likelihood(model(test_x))
+        pred_mean = pred.mean
+        lower, upper = pred.confidence_region()
+
+    # Move to CPU and convert to numpy
+    pred_mean_np = pred_mean.detach().cpu().numpy()
+    test_y_np = test_y.detach().cpu().numpy()
+    lower_np = lower.detach().cpu().numpy()
+    upper_np = upper.detach().cpu().numpy()
+
+    # Denormalize if needed
+    if normalization_params is not None:
+        y_min_np = normalization_params['y_min'].cpu().numpy() if torch.is_tensor(normalization_params['y_min']) else normalization_params['y_min']
+        y_scale_np = normalization_params['y_scale'].cpu().numpy() if torch.is_tensor(normalization_params['y_scale']) else normalization_params['y_scale']
+
+        pred_mean_np = denormalize(pred_mean_np, y_min_np, y_scale_np)
+        test_y_np = denormalize(test_y_np, y_min_np, y_scale_np)
+        lower_np = denormalize(lower_np, y_min_np, y_scale_np)
+        upper_np = denormalize(upper_np, y_min_np, y_scale_np)
+
+    # Calculate RMSE
+    rmse = np.sqrt(np.mean((pred_mean_np - test_y_np)**2))
+
+    # Calculate coverage (% of points within 95% CI)
+    within_ci = np.sum((test_y_np >= lower_np) & (test_y_np <= upper_np))
+    coverage = 100.0 * within_ci / len(test_y_np)
+
+    # Plot true vs predicted
+    if plot_results:
+        plt.figure(figsize=(8, 8))
+
+        # Scatter plot
+        plt.scatter(test_y_np, pred_mean_np, alpha=0.5, s=20)
+
+        # Perfect prediction line
+        min_val = min(test_y_np.min(), pred_mean_np.min())
+        max_val = max(test_y_np.max(), pred_mean_np.max())
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+
+        plt.xlabel('True Moisture (%)', fontsize=12)
+        plt.ylabel('Predicted Moisture (%)', fontsize=12)
+        plt.title(f'True vs Predicted Moisture\nRMSE: {rmse:.3f}, Coverage: {coverage:.1f}%', fontsize=14)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.axis('equal')
+        plt.tight_layout()
+        plt.show(block=False)
+
+    print(f"\n=== Model Evaluation ===")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"95% CI Coverage: {coverage:.2f}%")
+    print(f"Number of test points: {len(test_y_np)}")
+
+    return rmse, coverage
+
 
 ### PLOTTING ###
 def plot_surface_matplotlib(grid_lon, grid_lat, mean, train_x=None, train_y=None):
@@ -691,180 +1274,6 @@ def plot_loss_curve(losses):
     plt.show(block=False)
 
 
-def print_scaled_hyperparameters(model, likelihood, normalization_params=None):
-    """
-    Print hyperparameters scaled back to original data units for interpretability.
-
-    Parameters
-    ----------
-    model : ExactGPModel
-        Trained GP model
-    likelihood : GaussianLikelihood
-        Trained likelihood
-    normalization_params : dict or None
-        If provided, scale hyperparameters back to original units
-    """
-    # Get hyperparameters in normalized space
-    lengthscale = model.covar_module.base_kernel.lengthscale.detach().cpu().numpy()
-    outputscale = model.covar_module.outputscale.item()
-    noise = likelihood.noise.item()
-
-    if isinstance(model.mean_module, gpytorch.means.ConstantMean):
-        mean_param = model.mean_module.constant.item()
-    elif isinstance(model.mean_module, gpytorch.means.LinearMean):
-        weights = model.mean_module.weights.detach().cpu().numpy()
-        bias = model.mean_module.bias.item()
-        mean_param = f"bias={bias:.3f}, w={weights}"
-    else:
-        mean_param = "N/A"
-
-    print("\n=== Learned Hyperparameters ===")
-
-    if normalization_params is not None:
-        # Scale hyperparameters back to original units
-        x_scale_np = normalization_params['x_scale'].cpu().numpy() if torch.is_tensor(normalization_params['x_scale']) else normalization_params['x_scale']
-        y_min_np = normalization_params['y_min'].cpu().numpy() if torch.is_tensor(normalization_params['y_min']) else normalization_params['y_min']
-        y_scale_np = normalization_params['y_scale'].cpu().numpy() if torch.is_tensor(normalization_params['y_scale']) else normalization_params['y_scale']
-
-        # Scale lengthscale by x_scale (spatial units)
-        lengthscale_scaled = lengthscale * x_scale_np
-
-        # Scale outputscale and noise by y_scale (moisture units)
-        outputscale_scaled = outputscale * y_scale_np
-        noise_scaled = noise * y_scale_np
-
-        # Scale mean by y_scale and add y_min
-        if isinstance(model.mean_module, gpytorch.means.ConstantMean):
-            mean_scaled = mean_param * y_scale_np + y_min_np
-            mean_str = f"{mean_scaled:.3f}"
-        elif isinstance(model.mean_module, gpytorch.means.LinearMean):
-            # Weights need to be scaled by y_scale/x_scale, bias by y_scale + y_min
-            weights_scaled = weights * y_scale_np / x_scale_np
-            bias_scaled = bias * y_scale_np + y_min_np
-            mean_str = f"bias={bias_scaled:.3f}, w={weights_scaled}"
-        else:
-            mean_str = "N/A"
-
-        # Format lengthscale (may be array for ARD)
-        if lengthscale_scaled.size == 1:
-            lengthscale_str = f"{lengthscale_scaled.item():.3f} meters"
-        else:
-            lengthscale_str = f"East={lengthscale_scaled[0]:.3f}m, North={lengthscale_scaled[1]:.3f}m"
-
-        print(f"Lengthscale (original units): {lengthscale_str}")
-        print(f"Outputscale (original units): {outputscale_scaled:.3f} (moisture variance)")
-        print(f"Noise (original units): {noise_scaled:.6f} (moisture std dev)")
-        print(f"Mean (original units): {mean_str}")
-        print("\nNormalized space hyperparameters:")
-        if lengthscale.size == 1:
-            print(f"  Lengthscale: {lengthscale.item():.3f}")
-        else:
-            print(f"  Lengthscale: East={lengthscale[0]:.3f}, North={lengthscale[1]:.3f}")
-        print(f"  Outputscale: {outputscale:.3f}")
-        print(f"  Noise: {noise:.6f}")
-        print(f"  Mean: {mean_param}")
-    else:
-        # Format lengthscale (may be array for ARD)
-        if lengthscale.size == 1:
-            lengthscale_str = f"{lengthscale.item():.3f} meters"
-        else:
-            lengthscale_str = f"East={lengthscale[0]:.3f}m, North={lengthscale[1]:.3f}m"
-
-        print(f"Lengthscale: {lengthscale_str}")
-        print(f"Outputscale: {outputscale:.3f}")
-        print(f"Noise: {noise:.6f}")
-
-        # Format mean
-        if isinstance(model.mean_module, gpytorch.means.ConstantMean):
-            print(f"Mean: {mean_param:.3f}")
-        else:
-            print(f"Mean: {mean_param}")
-
-def evaluate_model(model, likelihood, test_x, test_y, normalization_params=None, plot_results=True):
-    """
-    Evaluate model performance on test data.
-
-    Parameters
-    ----------
-    model : ExactGPModel
-        Trained GP model
-    likelihood : GaussianLikelihood
-        Trained likelihood
-    test_x : torch.Tensor
-        Test input features (N, 2)
-    test_y : torch.Tensor
-        True test output values (N,)
-    normalization_params : dict or None
-        If provided, denormalize predictions for evaluation
-    plot_results : bool
-        If True, plot true vs predicted scatter plot
-
-    Returns
-    -------
-    rmse : float
-        Root mean squared error
-    coverage : float
-        Percentage of true values within 95% confidence interval
-    """
-    model.eval()
-    likelihood.eval()
-
-    with torch.no_grad():
-        pred = likelihood(model(test_x))
-        pred_mean = pred.mean
-        lower, upper = pred.confidence_region()
-
-    # Move to CPU and convert to numpy
-    pred_mean_np = pred_mean.detach().cpu().numpy()
-    test_y_np = test_y.detach().cpu().numpy()
-    lower_np = lower.detach().cpu().numpy()
-    upper_np = upper.detach().cpu().numpy()
-
-    # Denormalize if needed
-    if normalization_params is not None:
-        y_min_np = normalization_params['y_min'].cpu().numpy() if torch.is_tensor(normalization_params['y_min']) else normalization_params['y_min']
-        y_scale_np = normalization_params['y_scale'].cpu().numpy() if torch.is_tensor(normalization_params['y_scale']) else normalization_params['y_scale']
-
-        pred_mean_np = denormalize(pred_mean_np, y_min_np, y_scale_np)
-        test_y_np = denormalize(test_y_np, y_min_np, y_scale_np)
-        lower_np = denormalize(lower_np, y_min_np, y_scale_np)
-        upper_np = denormalize(upper_np, y_min_np, y_scale_np)
-
-    # Calculate RMSE
-    rmse = np.sqrt(np.mean((pred_mean_np - test_y_np)**2))
-
-    # Calculate coverage (% of points within 95% CI)
-    within_ci = np.sum((test_y_np >= lower_np) & (test_y_np <= upper_np))
-    coverage = 100.0 * within_ci / len(test_y_np)
-
-    # Plot true vs predicted
-    if plot_results:
-        plt.figure(figsize=(8, 8))
-
-        # Scatter plot
-        plt.scatter(test_y_np, pred_mean_np, alpha=0.5, s=20)
-
-        # Perfect prediction line
-        min_val = min(test_y_np.min(), pred_mean_np.min())
-        max_val = max(test_y_np.max(), pred_mean_np.max())
-        plt.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
-
-        plt.xlabel('True Moisture (%)', fontsize=12)
-        plt.ylabel('Predicted Moisture (%)', fontsize=12)
-        plt.title(f'True vs Predicted Moisture\nRMSE: {rmse:.3f}, Coverage: {coverage:.1f}%', fontsize=14)
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.axis('equal')
-        plt.tight_layout()
-        plt.show(block=False)
-
-    print(f"\n=== Model Evaluation ===")
-    print(f"RMSE: {rmse:.4f}")
-    print(f"95% CI Coverage: {coverage:.2f}%")
-    print(f"Number of test points: {len(test_y_np)}")
-
-    return rmse, coverage
-
 
 ### MAIN FUNCTION ###
 def main():
@@ -874,6 +1283,19 @@ def main():
 
     # General options
     normalize_data_flag=True
+    moisture_trim_range = (10, 30) # Set to None to disable
+
+    # Preset normalization parameters (in physical units)
+    # Set to None to calculate from data
+    # preset_normalization_bounds = {
+    #     'x_min': torch.tensor([363000.0, 4305000.0]),  # Example values for Easting, Northing
+    #     'x_max': torch.tensor([364000.0, 4306000.0]),
+    #     'y_min': torch.tensor(10.0),
+    #     'y_max': torch.tensor(30.0)
+    # }
+    preset_normalization_bounds = None # to disable
+
+    downsample_grid_size = 60 # in meters. Set to None to disable.
 
     #####
     # Training parameters
@@ -883,7 +1305,7 @@ def main():
     print(f"Using device: {device}")
 
     num_samples=5000 #-1 (GPU out of memory data is 16,465 long) #500
-    percent_train=0.8
+    percent_train=0.8 #0.7 #0.8
 
     # Initial training parameters (for first 10% of data)
     lr_initial=0.005 #0.1 - not normalized, 0.005 - normalized
@@ -904,7 +1326,7 @@ def main():
     num_chunks = 8  # Train on 10%, 20%, 30%, ..., 80% of data
 
     # Real-time single-point update mode
-    enable_realtime_single_point = True #False  # Set to True to add points one-by-one with live plot updates
+    enable_realtime_single_point = False  # Set to True to add points one-by-one with live plot updates
     realtime_pause_seconds = 0.0 #0.5  # Pause between adding each point
     realtime_max_points = 500 #100  # Maximum number of points to add in real-time mode
     realtime_update_interval = 1  # Update model every N points (1 = every point, 5 = every 5 points, etc.)
@@ -918,22 +1340,82 @@ def main():
     plot_cis=True #False
 
     # Plot control flags
-    plot_training_diagnostics = False  # Set to False to disable loss curves and eval plots during incremental training
+    plot_training_diagnostics = True  # Set to False to disable loss curves and eval plots during incremental training
 
 
+    #####
+    # Prior configuration for adaptive sampling (in physical units)
+    #####
+    use_priors = True  # Enable informative priors for faster convergence with few samples
+    warm_start_from_priors = True # Initialize model at prior medians
+
+    # Physical prior specifications (will be converted to normalized space automatically)
+    # Lengthscale: spatial correlation distance in meters
+    #   For soil moisture: typically 5-20m depending on field variability
+    lengthscale_meters = 10.0  # Median expected lengthscale in meters
+
+    # Outputscale: signal magnitude in moisture percentage
+    #   Typical range of soil moisture variation across the field
+    outputscale_moisture = 0.5  # Expect ~0.5% typical variation in moisture
+
+    # Noise: measurement noise variance in moisture percentage squared
+    #   Soil moisture sensors typically have ~0.5-1% accuracy, so variance is (0.5)²=0.25 to 1²=1
+    noise_moisture = 0.1  # Median expected noise variance: 0.1%²
+
+    # Mean: expected mean moisture value in percentage
+    #   Center of your typical moisture range
+    mean_moisture = 17.0  # Expected mean: 17% (center of [16.3, 18.4] range)
+
+    # Uncertainty factors for LogNormal priors (sigma parameter)
+    #   Higher values = more uncertainty. 0.5 is moderate, 1.0 is high uncertainty
+    lengthscale_uncertainty = 0.7  # Moderate uncertainty in spatial scale
+    outputscale_uncertainty = 0.7  # Moderate uncertainty in signal magnitude
+    noise_uncertainty = 0.5  # Lower uncertainty in noise (we know sensor specs)
+
+    # Mean prior standard deviation in moisture percentage
+    mean_std_moisture = 0.5  # Allow mean to vary by ±0.5% around expected value
+
+
+    #####
     # LOAD DATA
+    #####
     train_x_full, train_y_full, test_x, test_y, normalization_params = load_data(
         data_path,
         num_samples=num_samples,
         percent_train=percent_train,
-        normalize=normalize_data_flag
+        normalize=normalize_data_flag,
+        moisture_trim_range=moisture_trim_range,
+        normalization_bounds=preset_normalization_bounds,
+        downsample_grid_size=downsample_grid_size
     )
+
+    # Convert physical priors to normalized space
+    if use_priors and normalization_params is not None:
+        lengthscale_prior, outputscale_prior, noise_prior, mean_prior = normalize_priors(
+            lengthscale_meters=lengthscale_meters,
+            outputscale_moisture=outputscale_moisture,
+            noise_moisture=noise_moisture,
+            mean_moisture=mean_moisture,
+            normalization_params=normalization_params,
+            lengthscale_uncertainty=lengthscale_uncertainty,
+            outputscale_uncertainty=outputscale_uncertainty,
+            noise_uncertainty=noise_uncertainty,
+            mean_std_moisture=mean_std_moisture
+        )
+    else:
+        lengthscale_prior = None
+        outputscale_prior = None
+        noise_prior = None
+        mean_prior = None
 
     # Move test data to device once
     test_x = test_x.to(device)
     test_y = test_y.to(device)
 
     if enable_realtime_single_point:
+        training_iter_single = 20
+        patience_single = 10
+        
         # REAL-TIME SINGLE-POINT UPDATE MODE
         print(f"\n{'='*60}")
         print(f"REAL-TIME SINGLE-POINT UPDATE MODE")
@@ -947,12 +1429,24 @@ def main():
         train_y_current = train_y_full[:1].to(device)
 
         likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
-        model = ExactGPModel(train_x_current, train_y_current, likelihood).to(device)
+        model = ExactGPModel(train_x_current, train_y_current, likelihood,
+                             use_priors=use_priors,
+                             lengthscale_prior=lengthscale_prior,
+                             outputscale_prior=outputscale_prior,
+                             noise_prior=noise_prior,
+                             mean_prior=mean_prior,
+                             init_at_priors=warm_start_from_priors).to(device)
 
-        # Initial quick training
-        print(f"Initial training with 1 point...")
+        # Check priors before training
+        print_prior_configuration(model, likelihood, normalization_params)
+
+        print(f"\nInitial training with 1 point...")
         train(model, likelihood, train_x_current, train_y_current,
-              lr=lr_update, training_iter=50, patience=10, min_delta=min_delta, plot_loss=False)
+              lr=lr_update, training_iter=training_iter_single, patience=patience_single, min_delta=min_delta, plot_loss=False,
+              normalization_params=normalization_params)
+
+        # Check priors after training
+        print_prior_configuration(model, likelihood, normalization_params)
 
         # Create single BackgroundPlotter that we'll update
         plotter = pvqt.BackgroundPlotter(window_size=(900, 700), title="Real-time GP Update")
@@ -978,10 +1472,16 @@ def main():
                     train_y=train_y_current,
                     device=device,
                     lr=lr_update,
-                    training_iter=20,  # Quick updates
-                    patience=10,
+                    training_iter=training_iter_single,  
+                    patience=patience_single, 
                     min_delta=min_delta,
-                    plot_loss=False
+                    plot_loss=False,
+                    use_priors=use_priors,
+                    lengthscale_prior=lengthscale_prior,
+                    outputscale_prior=outputscale_prior,
+                    noise_prior=noise_prior,
+                    mean_prior=mean_prior,
+                    normalization_params=normalization_params
                 )
             else:
                 # Just add data without retraining
@@ -1025,8 +1525,8 @@ def main():
             # Pause
             time.sleep(realtime_pause_seconds)
 
-        # print(f"\n\nReal-time updates complete. Press Enter to close...")
-        # input()
+        if len(test_x) > 0:
+            rmse, coverage = evaluate_model(model, likelihood, test_x, test_y, normalization_params, plot_results=plot_training_diagnostics)
 
     elif enable_incremental:
         # INCREMENTAL TRAINING: Start with 10%, add 10% at a time up to 80%
@@ -1048,7 +1548,13 @@ def main():
         train_y_current = train_y_full[:chunk_size].to(device)
 
         likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
-        model = ExactGPModel(train_x_current, train_y_current, likelihood).to(device)
+        model = ExactGPModel(train_x_current, train_y_current, likelihood,
+                             use_priors=use_priors,
+                             lengthscale_prior=lengthscale_prior,
+                             outputscale_prior=outputscale_prior,
+                             noise_prior=noise_prior,
+                             mean_prior=mean_prior,
+                             init_at_priors=warm_start_from_priors).to(device)
 
         print(f"\n{'='*60}")
         print(f"INITIAL TRAINING: {chunk_size} samples (10%)")
@@ -1056,7 +1562,8 @@ def main():
 
         train(model, likelihood, train_x_current, train_y_current,
               lr=lr_initial, training_iter=training_iter_initial,
-              patience=patience_initial, min_delta=min_delta, plot_loss=plot_training_diagnostics)
+              patience=patience_initial, min_delta=min_delta, plot_loss=plot_training_diagnostics,
+              normalization_params=normalization_params)
 
         print_scaled_hyperparameters(model, likelihood, normalization_params)
 
@@ -1125,7 +1632,13 @@ def main():
                 training_iter=training_iter_update,
                 patience=patience_update,
                 min_delta=min_delta,
-                plot_loss=plot_training_diagnostics
+                plot_loss=plot_training_diagnostics,
+                use_priors=use_priors,
+                lengthscale_prior=lengthscale_prior,
+                outputscale_prior=outputscale_prior,
+                noise_prior=noise_prior,
+                mean_prior=mean_prior,
+                normalization_params=normalization_params
             )
 
             print_scaled_hyperparameters(model, likelihood, normalization_params)
@@ -1174,7 +1687,13 @@ def main():
         train_y_current = train_y_full.to(device)
 
         likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
-        model = ExactGPModel(train_x_current, train_y_current, likelihood).to(device)
+        model = ExactGPModel(train_x_current, train_y_current, likelihood,
+                             use_priors=use_priors,
+                             lengthscale_prior=lengthscale_prior,
+                             outputscale_prior=outputscale_prior,
+                             noise_prior=noise_prior,
+                             mean_prior=mean_prior,
+                             init_at_priors=warm_start_from_priors).to(device)
 
         print(f"\n{'='*60}")
         print(f"STANDARD TRAINING")
@@ -1183,7 +1702,8 @@ def main():
 
         train(model, likelihood, train_x_current, train_y_current,
               lr=lr_initial, training_iter=training_iter_initial,
-              patience=patience_initial, min_delta=min_delta, plot_loss=plot_training_diagnostics)
+              patience=patience_initial, min_delta=min_delta, plot_loss=plot_training_diagnostics,
+              normalization_params=normalization_params)
 
         print_scaled_hyperparameters(model, likelihood, normalization_params)
 
