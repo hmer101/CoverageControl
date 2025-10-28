@@ -48,6 +48,8 @@
 #include <CoverageControl/algorithms/oracle_bang_explore_exploit.h>
 #include <CoverageControl/algorithms/oracle_explore_exploit.h>
 #include <CoverageControl/algorithms/simul_explore_exploit.h>
+#include <CoverageControl/adaptive_system.h>
+#include <CoverageControl/action.h>
 
 #include <vector>
 
@@ -256,7 +258,10 @@ void pyCoverageControl_core(py::module &m) {
       .def_readwrite("pMaxPeak", &Parameters::pMaxPeak)
       .def_readwrite("pLloydNumTries", &Parameters::pLloydNumTries)
       .def_readwrite("pLloydMaxIterations", &Parameters::pLloydMaxIterations)
-      .def_readwrite("pNumFrontiers", &Parameters::pNumFrontiers);
+      .def_readwrite("pNumFrontiers", &Parameters::pNumFrontiers)
+      .def_readwrite("pSampleDuration", &Parameters::pSampleDuration)
+      .def_readwrite("pSampleRadius", &Parameters::pSampleRadius)
+      .def_readwrite("pMaxSearchRadius", &Parameters::pMaxSearchRadius);
 
   /* py::class_<GeoLocalTransform>(m, "GeoLocalTransform") */
   /*     .def(py::init<double, double, double>()) */
@@ -382,6 +387,129 @@ void pyCoverageControl_core_coverage_system(py::module &m) {
       .def("GetNumRobots", &CoverageSystem::GetNumRobots)
       .def("ClearRobotMaps", &CoverageSystem::ClearRobotMaps)
       .def("ClearExploredIDF", &CoverageSystem::ClearExploredIDF);
+}
+
+void pyCoverageControl_core_actions(py::module &m) {
+  // Base Action class
+  py::class_<Action, std::shared_ptr<Action>>(m, "Action")
+      .def("GetRobotId", &Action::GetRobotId)
+      .def("SetRobotId", &Action::SetRobotId)
+      .def("GetTargetPosition", &Action::GetTargetPosition)
+      .def("SetTargetPosition", &Action::SetTargetPosition)
+      .def("GetStartTime", &Action::GetStartTime)
+      .def("SetStartTime", &Action::SetStartTime)
+      .def("IsStarted", &Action::IsStarted)
+      .def("IsComplete", &Action::IsComplete)
+      .def("GetVelocityAction", &Action::GetVelocityAction)
+      .def("GetActionType", &Action::GetActionType);
+
+  // MoveAction class
+  py::class_<MoveAction, Action, std::shared_ptr<MoveAction>>(m, "MoveAction")
+      .def(py::init<Point2 const &>());
+
+  // SampleAction class
+  py::class_<SampleAction, Action, std::shared_ptr<SampleAction>>(m, "SampleAction")
+      .def(py::init<Point2 const &>())
+      .def("TakeSample", &SampleAction::TakeSample)
+      .def("ReadyToSample", &SampleAction::ReadyToSample);
+}
+
+void pyCoverageControl_core_adaptive_system(py::module &m) {
+  py::class_<AdaptiveSystem>(m, "AdaptiveSystem")
+      .def(py::init<Parameters const &>())
+      .def(py::init<Parameters const &, int const, int const>())
+      .def(py::init<Parameters const &, int const, int const, int const>())
+      .def(
+          py::init<Parameters const &, WorldIDF const &, PointVector const &>())
+      .def(
+          py::init<Parameters const &, WorldIDF const &, std::string const &>())
+      .def(py::init<Parameters const &, BNDVector const &,
+                    PointVector const &>())
+      .def("GetWorldMap", &AdaptiveSystem::GetWorldMap,
+           py::return_value_policy::reference_internal)
+      .def("GetWorldMapMutable", &AdaptiveSystem::GetWorldMapMutable,
+           py::return_value_policy::reference_internal)
+      .def("GetWorldIDFObject", &AdaptiveSystem::GetWorldIDFObject,
+           py::return_value_policy::reference_internal)
+      .def("GetWorldIDF", &AdaptiveSystem::GetWorldIDFObject,
+           py::return_value_policy::reference_internal)
+      .def("StepControl", &AdaptiveSystem::StepControl)
+      .def("StepActions", [](AdaptiveSystem &self, std::vector<std::shared_ptr<Action>> const &actions, int current_step) {
+          // Convert shared_ptr to unique_ptr temporarily for the call
+          std::vector<std::unique_ptr<Action>> action_ptrs;
+          action_ptrs.reserve(actions.size());
+          for (auto const &action : actions) {
+              action_ptrs.push_back(std::unique_ptr<Action>(action.get()));
+          }
+          bool result = self.StepActions(action_ptrs, current_step);
+          // Release ownership so shared_ptr maintains control
+          for (auto &ptr : action_ptrs) {
+              ptr.release();
+          }
+          return result;
+      }, py::arg("actions"), py::arg("current_step"))
+      .def("StepRobotsToGoals", &AdaptiveSystem::StepRobotsToGoals)
+      .def("StepRobotToGoal", &AdaptiveSystem::StepRobotToGoal)
+      .def("SetLocalRobotPositions", &AdaptiveSystem::SetLocalRobotPositions)
+      .def("SetLocalRobotPosition", &AdaptiveSystem::SetLocalRobotPosition)
+      .def("SetGlobalRobotPosition", &AdaptiveSystem::SetGlobalRobotPosition)
+      .def("SetGlobalRobotPositions", &AdaptiveSystem::SetGlobalRobotPositions)
+      .def("GetRelativePositonsNeighbors",
+           &AdaptiveSystem::GetRelativePositonsNeighbors)
+      .def("SetRobotPositions", &AdaptiveSystem::SetRobotPositions)
+      .def("GetRobotPosition", &AdaptiveSystem::GetRobotPosition,
+           "Get Position of Robot", py::arg("robot_id"),
+           py::arg("force_no_noise") = false)
+      .def("GetRobotPositions", &AdaptiveSystem::GetRobotPositions,
+           "Get Positions of Robots", py::arg("force_no_noise") = false)
+      .def("GetRobotLocalMap", &AdaptiveSystem::GetRobotLocalMap,
+           py::return_value_policy::reference_internal)
+      .def("GetRobotMap", &AdaptiveSystem::GetRobotMap,
+           py::return_value_policy::reference_internal)
+      .def("GetRobotMapMutable", &AdaptiveSystem::GetRobotMapMutable,
+           py::return_value_policy::reference_internal)
+      .def("GetRobotSensorView", &AdaptiveSystem::GetRobotSensorView,
+           py::return_value_policy::reference_internal)
+      .def("GetCommunicationMaps", &AdaptiveSystem::GetCommunicationMaps)
+      .def("GetRobotsInCommunication",
+           &AdaptiveSystem::GetRobotsInCommunication)
+      .def("GetSystemExploredIDFMap", &AdaptiveSystem::GetSystemExploredIDFMap,
+           py::return_value_policy::reference_internal)
+      .def("GetSystemExploredIDFMapMutable",
+           &AdaptiveSystem::GetSystemExploredIDFMapMutable,
+           py::return_value_policy::reference_internal)
+      .def("GetRobotObstacleMap", &AdaptiveSystem::GetRobotObstacleMap,
+           py::return_value_policy::copy)
+      .def("GetRobotExplorationMap", &AdaptiveSystem::GetRobotExplorationMap,
+           py::return_value_policy::reference_internal)
+      .def("GetSystemExplorationMap", &AdaptiveSystem::GetSystemExplorationMap,
+           py::return_value_policy::reference_internal)
+      .def("GetSystemMap", &AdaptiveSystem::GetSystemMap,
+           py::return_value_policy::reference_internal)
+      .def("GetObjectiveValue", &AdaptiveSystem::GetObjectiveValue)
+      .def("PlotSystemMap", py::overload_cast<std::string const &>(
+                                &AdaptiveSystem::PlotSystemMap, py::const_))
+      .def("PlotSystemMap", py::overload_cast<std::string const &, int const &, std::vector<int> const &>(
+                                &AdaptiveSystem::PlotSystemMap, py::const_))
+      .def("PlotWorldMap", &AdaptiveSystem::PlotWorldMap)
+      .def("PlotInitMap", py::overload_cast<std::string const &>(
+                              &AdaptiveSystem::PlotInitMap, py::const_))
+      .def("PlotInitMap",
+           py::overload_cast<std::string const &, std::string const &>(
+               &AdaptiveSystem::PlotInitMap, py::const_))
+      .def("PlotWorldMapRobots", &AdaptiveSystem::PlotWorldMapRobots)
+      .def("PlotGradientMap", &AdaptiveSystem::PlotGradientMap)
+      .def("GetExplorationRatio", &AdaptiveSystem::GetExplorationRatio)
+      .def("GetWeightedExplorationRatio",
+           &AdaptiveSystem::GetWeightedExplorationRatio)
+      .def("RecordPlotData",
+           py::overload_cast<>(&AdaptiveSystem::RecordPlotData))
+      .def("RecordPlotData", py::overload_cast<std::string const &>(
+                                 &AdaptiveSystem::RecordPlotData))
+      .def("RenderRecordedMap", &AdaptiveSystem::RenderRecordedMap)
+      .def("WriteEnvironment", &AdaptiveSystem::WriteEnvironment)
+      .def("GetNumRobots", &AdaptiveSystem::GetNumRobots)
+      .def("TakeSample", &AdaptiveSystem::TakeSample);
 }
 
 // CudaUtils

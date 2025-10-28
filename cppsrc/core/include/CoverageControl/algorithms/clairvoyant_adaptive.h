@@ -1,18 +1,18 @@
 /*
- * This file is part of the CoverageControl library
+ * This file is part of the AdaptiveSampling library
  *
- * Author: Saurav Agarwal
- * Contact: sauravag@seas.upenn.edu, agr.saurav1@gmail.com
- * Repository: https://github.com/KumarRobotics/CoverageControl
+ * Author: Harvey Merton
+ * Contact: hmer101@mit.edu
+ * Repository: https://github.com/hmer101/marl_sim_basic
  *
- * Copyright (c) 2024, Saurav Agarwal
+ * Copyright (c) 2025, Harvey Merton
  *
- * The CoverageControl library is free software: you can redistribute it and/or
+ * The AdaptiveSampling library is free software: you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or (at your
  * option) any later version.
  *
- * The CoverageControl library is distributed in the hope that it will be
+ * The AdaptiveSampling library is distributed in the hope that it will be
  * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
  * Public License for more details.
@@ -50,8 +50,7 @@ namespace CoverageControl {
  * @}
  * Clairvoyant adaptive sampling algorithm
  * The algorithm has knowledge of the entire map in a centralized manner.
- * It selects the next sampling location based on the largest gradient at the
- * edge of what the robot knows.
+ * It selects the next sampling location based on the highest importance..
  */
 class ClairvoyantAdaptive : public AbstractControllerAdaptive {
  private:

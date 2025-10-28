@@ -74,6 +74,10 @@ int main(int argc, char** argv) {
     env = std::make_unique<CoverageControl::AdaptiveSystem>(params);
   }
 
+  // Save the environment
+  // std::string save_dir = "/marl_sim_basic/output_cpp/env_save/";
+  // env->WriteEnvironment(save_dir + "robot_pos.pos", save_dir + "world_idf.idf");
+
   //std::cout << "2" << std::endl;
 
   auto init_objective = env->GetObjectiveValue();
@@ -97,7 +101,7 @@ int main(int argc, char** argv) {
 
 
   AdaptiveAlgorithm algorithm(params, *env);
-  auto goals = algorithm.GetGoals(); 
+  //auto goals = algorithm.GetGoals(); 
 
   for (int ii = 0; ii < params.pEpisodeSteps; ++ii) {
     algorithm.ComputeActions(ii);

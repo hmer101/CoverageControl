@@ -29,6 +29,7 @@
 
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 #include "core_binds.h"
@@ -36,6 +37,8 @@
 PYBIND11_MODULE(_core, m) {
   CoverageControl::pyCoverageControl_core(m);
   CoverageControl::pyCoverageControl_core_coverage_system(m);
+  CoverageControl::pyCoverageControl_core_actions(m);
+  CoverageControl::pyCoverageControl_core_adaptive_system(m);
   CoverageControl::pyCoverageControl_core_cuda_utils(m);
 
 #ifdef CoverageControl_VERSION
