@@ -138,7 +138,8 @@ void pyCoverageControl_core(py::module &m) {
       .def("PrintMapSize", &WorldIDF::PrintMapSize)
       .def("LoadMap", &WorldIDF::LoadMap)
       .def("WriteDistributions", &WorldIDF::WriteDistributions)
-      .def("GetNumFeatures", &WorldIDF::GetNumFeatures);
+      .def("GetNumFeatures", &WorldIDF::GetNumFeatures)
+      .def("GetWorldLimits", &WorldIDF::GetWorldLimits);
 
   py::class_<RobotModel>(m, "RobotModel")
       .def(py::init<Parameters const &, Point2 const, WorldIDF const>())

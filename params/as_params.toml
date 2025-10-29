@@ -28,10 +28,10 @@ LocalMapSize = 10 #256
 # Map update settings
 [Environment.Maps.UpdateSettings]
 
-UpdateRobotMap = true # Set UpdateRobotMap to false for centralized known world
-UpdateSensorView = true
-UpdateExplorationMap = false
-UpdateSystemMap = true
+UpdateRobotMap = false #true # Accumulates sensor readings into the robot's persistent map. Set UpdateRobotMap to false for centralized known world
+UpdateSensorView = false # Updates the robot's current sensor reading from the world IDF.
+UpdateExplorationMap = false # Maintains a binary map tracking which areas have been explored.
+UpdateSystemMap = false # Maintains a centralized global map by aggregating all robots' sensor views.
 
 # Parameters for the IDF
 [Environment.IDF]

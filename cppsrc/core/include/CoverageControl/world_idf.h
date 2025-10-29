@@ -36,6 +36,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "CoverageControl/Config.h"
 #include "CoverageControl/bivariate_normal_distribution.h"
@@ -258,6 +259,10 @@ class WorldIDF {
   const MapType &GetWorldMap() const { return world_map_; }
 
   MapType &GetWorldMapMutable() { return world_map_; }
+
+  std::pair<float, float> GetWorldLimits() const {
+    return std::make_pair(world_map_.minCoeff(), world_map_.maxCoeff());
+  }
 
   int WriteDistributions(std::string const &file_name) const;
 
