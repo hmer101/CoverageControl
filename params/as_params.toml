@@ -103,6 +103,6 @@ NumFrontiers = 10
 
 [Actions]
 # Sampling action
-SampleDuration = 2 #20 #in seconds
+SampleDuration = 2 #20 #in seconds. How long to wait before sample is taken
 SampleRadius = 10 # Radius around a sample point where not to take another sample (in m)
 
