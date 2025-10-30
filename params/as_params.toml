@@ -35,7 +35,7 @@ UpdateSystemMap = false # Maintains a centralized global map by aggregating all 
 
 # Parameters for the IDF
 [Environment.IDF]
-NumGaussianFeatures = 3 #32
+NumGaussianFeatures = 32 #3 #32
 
 # (I believe) polygons are also part of the IDF to be sensed
 NumPolygons = 0

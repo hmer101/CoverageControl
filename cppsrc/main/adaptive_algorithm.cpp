@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
   // Save the environment
   // std::string save_dir = "/marl_sim_basic/output_cpp/env_save/";
   // std::filesystem::create_directories(save_dir);  // Ensure directory exists
-  // env->WriteEnvironment(save_dir + "robot_pos.pos", save_dir + "world_idf.idf");
+  // env->WriteEnvironment(save_dir + "robot_pos_3.pos", save_dir + "world_idf_3.idf");
 
   //std::cout << "2" << std::endl;
 
