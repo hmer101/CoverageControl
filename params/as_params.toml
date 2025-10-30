@@ -72,9 +72,9 @@ SensorSize = 100 #64 # Positive integer. NOTE: Needs to be even
 CommunicationRange = 128
 
 MaxSearchRadius = 100 #Maximum distance within which to consider next sample points (m)
-MaxRobotSpeed = 1 #5 # in m/s. Make sure MaxRobotSpeed * TimeStep / Resolution < SensorSize/2
+MaxRobotSpeed = 10 #1 # in m/s. Make sure MaxRobotSpeed * TimeStep / Resolution < SensorSize/2
 RobotInitDist = 50 #1024 # Distance from the origin within which to initialize the position of the robots
-RobotPosHistorySize = 40 # For plotting and checking oscillations
+RobotPosHistorySize = 10 #40 # For plotting and checking oscillations
 
 TimeStep = 1 #0.2 # in seconds
 
@@ -103,6 +103,6 @@ NumFrontiers = 10
 
 [Actions]
 # Sampling action
-SampleDuration = 20 #10 #in seconds
-SampleRadius = 10 #4 # Radius around a sample point where not to take another sample (in m)
+SampleDuration = 2 #20 #in seconds
+SampleRadius = 10 # Radius around a sample point where not to take another sample (in m)
 
