@@ -355,9 +355,11 @@ public:
       return 0; // No action, nothing to do
     }
 
-    // Print action type
-    std::cout << "Robot " << robot_id << " at step " << current_step << ": "
-              << action->GetActionType() << std::endl;
+    // Print action type (if enabled)
+    if (params_.pPrintRobotActions) {
+      std::cout << "Robot " << robot_id << " at step " << current_step << ": "
+                << action->GetActionType() << std::endl;
+    }
 
     // Pre-action
     Point2 current_pos = robots_[robot_id].GetGlobalCurrentPosition();

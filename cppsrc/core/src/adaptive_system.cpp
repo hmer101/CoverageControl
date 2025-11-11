@@ -133,7 +133,9 @@ void AdaptiveSystem::TakeSample(int const robot_id) {
 
   // Simulate the robot taking a sample (e.g., update the robot's knowledge of the environment)
   // For now, this is a placeholder
-  std::cout << "Robot " << robot_id << " took a sample at " << position[0] << ", " << position[1] << std::endl;
+  if (params_.pPrintRobotActions) {
+    std::cout << "Robot " << robot_id << " took a sample at " << position[0] << ", " << position[1] << std::endl;
+  }
 
   // In a real implementation, you would update the robot's knowledge of the environment here
   // based on the IDF map and the robot's sensor characteristics.

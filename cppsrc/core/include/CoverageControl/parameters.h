@@ -62,6 +62,8 @@ class Parameters {
   //! > 1: High quality (takes more time to plot)
   //! < 1: Low quality (takes less time to plot)
   double pPlotScale = 1.0;
+  //! Print debug messages for robot actions (e.g., "Robot 0 at step 5: Sample")
+  bool pPrintRobotActions = false;
   /*! @} */
 
   /*! \name Map Parameters

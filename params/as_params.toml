@@ -7,6 +7,9 @@ NumRobots = 4 #1 #32
 # < 1: High quality (takes more time to plot)
 PlotScale = 1.0 #0.1
 
+# Print debug messages for robot actions (e.g., "Robot 0 at step 5: Sample")
+PrintRobotActions = false
+
 # Parameters for the environment
 [Environment]
 

@@ -67,6 +67,11 @@ void Parameters::ParseParameters() {
   } else {
     std::cout << "PlotScale (default): " << pPlotScale << std::endl;
   }
+  if (toml_IO["PrintRobotActions"].value<bool>()) {
+    pPrintRobotActions = toml_IO["PrintRobotActions"].value<bool>().value();
+  } else {
+    std::cout << "PrintRobotActions (default): " << pPrintRobotActions << std::endl;
+  }
 
   auto toml_EnvironmentMaps = toml_config["Environment"]["Maps"];
 
