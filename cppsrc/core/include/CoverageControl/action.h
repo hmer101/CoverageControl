@@ -206,6 +206,46 @@ class SampleAction : public Action {
   }
 };
 
+/*!
+ * \addtogroup cpp_api
+ * @{
+ * \class VelocityAction
+ * @}
+ * \brief Action class for direct velocity control
+ *
+ * This action directly specifies the robot's velocity (direction and speed)
+ * rather than a target position. The action completes after one time step.
+ * Direction is a unit vector, and speed is normalized [0,1] then scaled by pMaxRobotSpeed.
+ */
+class VelocityAction : public Action {
+ private:
+  Point2 direction_;  //!< Unit vector direction
+  double speed_;      //!< Normalized speed (0-1)
+
+ public:
+  VelocityAction(Point2 const &direction, double speed)
+      : Action(Point2(0, 0)),  // No target position for velocity action
+        direction_(direction.norm() > kEps ? direction.normalized() : Point2(1, 0)),
+        speed_(std::max(0.0, std::min(1.0, speed))) {}  // Clamp to [0,1]
+
+  bool IsComplete(int current_step, Parameters const &params,
+                 Point2 const &current_position) const override {
+    // Velocity action completes after one step
+    return IsStarted();
+  }
+
+  Point2 GetVelocityAction(Point2 const &current_position,
+                          Parameters const &params) const override {
+    // Scale normalized speed by max robot speed
+    double actual_speed = speed_ * params.pMaxRobotSpeed;
+    return actual_speed * direction_;
+  }
+
+  std::string GetActionType() const override {
+    return "Velocity";
+  }
+};
+
 } // namespace CoverageControl
 
 #endif  // CPPSRC_CORE_INCLUDE_COVERAGECONTROL_ACTION_H_

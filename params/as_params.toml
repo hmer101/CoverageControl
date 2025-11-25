@@ -75,7 +75,7 @@ SensorSize = 100 #64 # Positive integer. NOTE: Needs to be even
 CommunicationRange = 128
 
 MaxSearchRadius = 100 #Maximum distance within which to consider next sample points (m)
-MaxRobotSpeed = 10 #1 # in m/s. Make sure MaxRobotSpeed * TimeStep / Resolution < SensorSize/2
+MaxRobotSpeed = 5 #10 #1 # in m/s. Make sure MaxRobotSpeed * TimeStep / Resolution < SensorSize/2
 RobotInitDist = 50 #1024 # Distance from the origin within which to initialize the position of the robots
 RobotPosHistorySize = 10 #40 # For plotting and checking oscillations
 

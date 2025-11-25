@@ -371,7 +371,7 @@ public:
         TakeSample(robot_id);
         sample_action->TakeSample();
       }
-    } else if(action->GetActionType() == "Move"){ // Otherwise, move
+    } else if(action->GetActionType() == "Move" || action->GetActionType() == "Velocity"){ // Move or Velocity action
       Point2 velocity = action->GetVelocityAction(current_pos, params_);
 
       double speed = velocity.norm();

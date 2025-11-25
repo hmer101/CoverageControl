@@ -413,6 +413,10 @@ void pyCoverageControl_core_actions(py::module &m) {
       .def(py::init<Point2 const &>())
       .def("TakeSample", &SampleAction::TakeSample)
       .def("ReadyToSample", &SampleAction::ReadyToSample);
+
+  // VelocityAction class
+  py::class_<VelocityAction, Action, std::shared_ptr<VelocityAction>>(m, "VelocityAction")
+      .def(py::init<Point2 const &, double>());
 }
 
 void pyCoverageControl_core_adaptive_system(py::module &m) {
