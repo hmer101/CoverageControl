@@ -123,8 +123,8 @@ def main():
 
     # IDF parameters
     params.pNumGaussianFeatures = args.num_features
-    params.pMinSigma = 3#10
-    params.pMaxSigma = 10 #20
+    params.pMinSigma = 10 #3#10
+    params.pMaxSigma = 20 #10 #20
     params.pMinPeak = 6
     params.pMaxPeak = 10
     params.pNumPolygons = 0
