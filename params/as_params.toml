@@ -1,5 +1,5 @@
 # Specify parameters for coverage control in toml format
-NumRobots = 4 #1 #32
+NumRobots = 1 #4 #1 #32
 
 [IO]
 # Determines the quality of the plot and videos
